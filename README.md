@@ -5,6 +5,7 @@
 - **Curso:** Gerencia y Almacenamiento en Big Data
 - **Modalidad:** Individual
 - **Autor:** Eduardo Armas
+- **Dashboard en Vivo (Streamlit Cloud):** [🌐 Abrir Dashboard Interactivo](https://big-data-armas-eduardo-gbg4rsehtnpc8kxv4q4apq.streamlit.app)
 - **Dataset:** Niveles Hidrométricos Diarios del Río Orinoco (4 estaciones en cascada: *Puerto Ayacucho*, *Caicara del Orinoco*, *Ciudad Bolívar* y *Palúa*, 2009–2024) integrados con Precipitación Diaria Satelital **NASA POWER (MERRA-2 `PRECTOTCORR`)** en 15 puntos de la cuenca (1981–2025) y el Índice Climático **NOAA CPC Oceanic Niño Index (`ONI`)** (**271.196 registros crudos integrados**).
 
 ---
