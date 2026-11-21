@@ -451,12 +451,12 @@ def main() -> None:
             st.altair_chart(chart_mae, width="stretch")
 
         st.divider()
-        m_hdr1, m_hdr2 = st.columns([1.45, 1.0])
+        m_hdr1, m_hdr2 = st.columns([1.8, 1.0])
         with m_hdr1:
             st.markdown("##### 🗺️ Mapa de Estaciones del Río Orinoco y Red Pluviométrica NASA POWER")
         with m_hdr2:
             show_nasa_pts = st.checkbox(
-                "Mostrar también los 11 puntos satelitales de lluvia NASA POWER en la cuenca",
+                "Mostrar 11 puntos satelitales NASA POWER",
                 value=True,
                 key="show_nasa_map",
             )
@@ -501,8 +501,9 @@ def main() -> None:
                 get_text="nombre",
                 get_color=[250, 250, 250, 255],
                 get_size=14,
+                characterSet="auto",
                 get_alignment_baseline="'bottom'",
-                get_pixel_offset=[0, -14],
+                get_pixel_offset=[0, -16],
             ),
         ]
 
@@ -510,8 +511,8 @@ def main() -> None:
             layers=layers,
             initial_view_state=pdk.ViewState(
                 latitude=6.4,
-                longitude=-66.2,
-                zoom=5.2,
+                longitude=-66.5,
+                zoom=5.4,
                 pitch=0,
             ),
             tooltip={
@@ -532,21 +533,19 @@ def main() -> None:
             },
         )
 
-        map_col, tbl_col = st.columns([1.45, 1.0])
-        with map_col:
-            st.pydeck_chart(deck, width="stretch", height=380)
-        with tbl_col:
-            st_summary_tbl = map_river_df[
-                ["nombre", "tramo", "coordenadas", "nivel_medio_txt", "nivel_max_txt", "rol"]
-            ].rename(columns={
-                "nombre": "Estación (Orden Aguas Abajo)",
-                "tramo": "Tramo",
-                "coordenadas": "Lat / Lon",
-                "nivel_medio_txt": "Nivel Medio",
-                "nivel_max_txt": "Máximo Histórico",
-                "rol": "Rol en el Modelo (+14d)",
-            })
-            st.table(st_summary_tbl, border="horizontal", width="stretch", hide_index=True)
+        st.pydeck_chart(deck, width="stretch", height=400)
+
+        st_summary_tbl = map_river_df[
+            ["nombre", "tramo", "coordenadas", "nivel_medio_txt", "nivel_max_txt", "rol"]
+        ].rename(columns={
+            "nombre": "Estación (Orden Aguas Abajo)",
+            "tramo": "Tramo",
+            "coordenadas": "Lat / Lon",
+            "nivel_medio_txt": "Nivel Medio",
+            "nivel_max_txt": "Máximo Histórico",
+            "rol": "Rol en el Modelo (+14d)",
+        })
+        st.table(st_summary_tbl, border="horizontal", width="stretch", hide_index=True)
 
         with st.expander("ℹ️ Ver síntesis metodológica CRISP-DM y auditoría de calidad ETL (Antes vs. Después)", expanded=False):
             st.markdown(
