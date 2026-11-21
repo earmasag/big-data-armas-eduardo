@@ -6,7 +6,6 @@
 - **Modalidad:** Individual
 - **Autor:** Eduardo Armas
 - **Dataset:** Niveles Hidrométricos Diarios del Río Orinoco (4 estaciones en cascada: *Puerto Ayacucho*, *Caicara del Orinoco*, *Ciudad Bolívar* y *Palúa*, 2009–2024) integrados con Precipitación Diaria Satelital **NASA POWER (MERRA-2 `PRECTOTCORR`)** en 15 puntos de la cuenca (1981–2025) y el Índice Climático **NOAA CPC Oceanic Niño Index (`ONI`)** (**271.196 registros crudos integrados**).
-- **Enlace al Video de Sustentación (mínimo 20 minutos):** [🎥 Ver Video de Sustentación en YouTube / Google Drive (Enlace No Listado)](https://youtu.be/REEMPLAZAR_CON_ENLACE_DEL_VIDEO)
 
 ---
 

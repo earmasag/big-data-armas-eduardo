@@ -34,7 +34,7 @@ def build_and_execute_notebook() -> Path:
     cells = []
 
     # =========================================================================
-    # CELDA 0: PORTADA, TÍTULO DEL TEMA Y DATASET, Y ENLACE AL VIDEO
+    # CELDA 0: PORTADA, TÍTULO DEL TEMA Y DATASET
     # =========================================================================
     cells.append(
         new_markdown_cell(
@@ -45,7 +45,6 @@ def build_and_execute_notebook() -> Path:
 - **Asignatura:** Gerencia y Almacenamiento en Big Data
 - **Autor:** Eduardo Armas
 - **Dataset Principal:** Niveles Hidrométricos Diarios del Río Orinoco (`Puerto Ayacucho`, `Caicara del Orinoco`, `Ciudad Bolívar`, `Palúa`) integrados con Precipitación Diaria Satelital **NASA POWER (MERRA-2)** en 15 puntos de la cuenca y el Índice Climático **NOAA CPC Oceanic Niño Index (ONI)** (2009–2024; **271.196 registros crudos integrados**).
-- **Enlace al Video de Sustentación (mínimo 20 min):** [🎥 Ver Video de Sustentación en YouTube / Google Drive (Enlace No Listado)](https://youtu.be/REEMPLAZAR_CON_ENLACE_DEL_VIDEO)
 
 ---"""
         )
