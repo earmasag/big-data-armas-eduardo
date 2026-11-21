@@ -22,13 +22,15 @@ import altair as alt
 import joblib
 import numpy as np
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.etl_pipeline import PROCESSED_DIR, STATION_LABELS
+from src.download_data import NASA_POINTS
+from src.etl_pipeline import PROCESSED_DIR, STATION_LABELS, STATION_REGIONS
 from src.generate_pdf import PDF_REPORT_PATH
 from src.ml_pipeline import MODEL_ARTIFACT_PATH
 from src.mongodb_store import load_analysis_from_mongodb, store_and_query_mongodb
@@ -188,6 +190,93 @@ def _impact_badge(impacto: str) -> str:
         "Alto": "🟠 Alto",
         "Medio": "🟡 Medio",
     }.get(impacto, f"🔵 {impacto}")
+
+
+NASA_POINT_LABELS = {
+    "apure_san_fernando": ("San Fernando de Apure", "Afluente Apure (Llanos)"),
+    "meta_orocue": ("Orocué (Río Meta)", "Afluente Meta (Colombia)"),
+    "meta_puerto_carreno": ("Puerto Carreño (Meta/Orinoco)", "Confluencia Meta-Orinoco"),
+    "guaviare_san_jose": ("San José del Guaviare", "Afluente Guaviare (Cuenca Alta)"),
+    "ventuari_manapiare": ("Manapiare (Río Ventuari)", "Afluente Ventuari (Amazonas)"),
+    "caura_maripa": ("Maripa (Río Caura)", "Afluente Caura (Bolívar)"),
+    "caroni_kavanayen": ("Kavanayén (Alto Caroní)", "Subcuenca Río Caroní"),
+    "caroni_uriman": ("Urimán (Río Caroní)", "Subcuenca Río Caroní"),
+    "caroni_canaima": ("Canaima (Río Caroní)", "Subcuenca Río Caroní"),
+    "paragua_la_paragua": ("La Paragua (Río Paragua)", "Subcuenca Río Caroní"),
+    "guri_embalse": ("Embalse de Guri", "Bajo Caroní (Hidroeléctrica)"),
+}
+
+STATION_RGB = {
+    "ayacucho": [0, 114, 178, 230],
+    "caicara": [0, 158, 115, 230],
+    "ciudad_bolivar": [213, 94, 0, 230],
+    "palua": [204, 121, 167, 230],
+}
+
+STATION_ROLES = {
+    "ayacucho": "1. Entrada Alto Orinoco (alerta temprana t-7 a t-14 días)",
+    "caicara": "2. Medio Orinoco (integra Meta y Apure hacia Ciudad Bolívar)",
+    "ciudad_bolivar": "3. Angostura Bajo Orinoco (control urbano de inundaciones)",
+    "palua": "4. Confluencia Caroní (puerto multimodal y calado naviero)",
+}
+
+
+def _build_map_dataframe(mongo_doc: dict[str, Any], include_nasa: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Construye los DataFrames geográficos para las 4 estaciones hidrométricas y 11 puntos NASA POWER."""
+    stats = mongo_doc.get("estadisticas_descriptivas", {})
+    st_metrics = {
+        m["unique_id"]: m for m in mongo_doc.get("modelo", {}).get("metricas_por_estacion", [])
+    }
+
+    river_rows = []
+    ordered_ids = ["ayacucho", "caicara", "ciudad_bolivar", "palua"]
+    for idx, st_id in enumerate(ordered_ids, start=1):
+        coords = NASA_POINTS[st_id]
+        st_stat = stats.get(st_id, {})
+        st_m = st_metrics.get(st_id, {})
+        river_rows.append({
+            "orden": idx,
+            "id": st_id,
+            "nombre": f"{idx}. {STATION_LABELS[st_id]}",
+            "estacion": STATION_LABELS[st_id],
+            "tipo": "Estación Limnimétrica + NASA POWER",
+            "tramo": STATION_REGIONS[st_id],
+            "lat": float(coords["lat"]),
+            "lon": float(coords["lon"]),
+            "coordenadas": f"{coords['lat']:.2f}° N, {coords['lon']:.2f}° O",
+            "nivel_medio_txt": f"{st_stat.get('media_m', 0.0):.2f} m s.n.m.",
+            "nivel_max_txt": f"{st_stat.get('max_m', 0.0):.2f} m s.n.m.",
+            "mae_txt": f"MAE: {st_m.get('mae_modelo_m', 0.0):.3f} m (-{st_m.get('mejora_mae_pct', 0.0):.1f}%)",
+            "rol": STATION_ROLES[st_id],
+            "color": STATION_RGB[st_id],
+            "radius": 24000,
+        })
+
+    river_df = pd.DataFrame(river_rows)
+    all_rows = list(river_rows)
+
+    if include_nasa:
+        for pt_id, (label, subbasin) in NASA_POINT_LABELS.items():
+            coords = NASA_POINTS[pt_id]
+            all_rows.append({
+                "orden": 0,
+                "id": pt_id,
+                "nombre": label,
+                "estacion": label,
+                "tipo": "Punto Satelital de Lluvia (NASA POWER)",
+                "tramo": subbasin,
+                "lat": float(coords["lat"]),
+                "lon": float(coords["lon"]),
+                "coordenadas": f"{coords['lat']:.2f}° N, {coords['lon']:.2f}° O",
+                "nivel_medio_txt": "Variable: PRECTOTCORR (mm/día)",
+                "nivel_max_txt": "Serie diaria 1981–2025",
+                "mae_txt": "Aporte pluvial de cuenca (14 días)",
+                "rol": subbasin,
+                "color": [86, 180, 233, 185],
+                "radius": 13000,
+            })
+
+    return pd.DataFrame(all_rows), river_df
 
 
 def main() -> None:
@@ -360,6 +449,104 @@ def main() -> None:
                 .configure_view(strokeWidth=0)
             )
             st.altair_chart(chart_mae, width="stretch")
+
+        st.divider()
+        m_hdr1, m_hdr2 = st.columns([1.45, 1.0])
+        with m_hdr1:
+            st.markdown("##### 🗺️ Mapa de Estaciones del Río Orinoco y Red Pluviométrica NASA POWER")
+        with m_hdr2:
+            show_nasa_pts = st.checkbox(
+                "Mostrar también los 11 puntos satelitales de lluvia NASA POWER en la cuenca",
+                value=True,
+                key="show_nasa_map",
+            )
+
+        map_all_df, map_river_df = _build_map_dataframe(mongo_doc, show_nasa_pts)
+        cascade_path = pd.DataFrame([{
+            "path": [[r["lon"], r["lat"]] for _, r in map_river_df.iterrows()],
+            "nombre": "Tránsito Hidráulico en Cascada: Puerto Ayacucho → Caicara → Ciudad Bolívar → Palúa",
+            "tipo": "Eje Fluvial del Río Orinoco",
+            "tramo": "Sentido de propagación de la onda de crecida",
+            "coordenadas": "Recorrido ~750 km",
+            "nivel_medio_txt": "Tiempo de tránsito: 7 a 14 días",
+            "mae_txt": "Correlación Caicara(t-7) -> C. Bolívar(t+14): r = 0.944",
+        }])
+
+        layers = [
+            pdk.Layer(
+                "PathLayer",
+                data=cascade_path,
+                get_path="path",
+                get_color=[86, 180, 233, 200],
+                width_scale=20,
+                width_min_pixels=4,
+                pickable=True,
+            ),
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=map_all_df,
+                get_position="[lon, lat]",
+                get_fill_color="color",
+                get_line_color=[255, 255, 255, 230],
+                line_width_min_pixels=2,
+                get_radius="radius",
+                pickable=True,
+                stroked=True,
+                filled=True,
+            ),
+            pdk.Layer(
+                "TextLayer",
+                data=map_river_df,
+                get_position="[lon, lat]",
+                get_text="nombre",
+                get_color=[250, 250, 250, 255],
+                get_size=14,
+                get_alignment_baseline="'bottom'",
+                get_pixel_offset=[0, -14],
+            ),
+        ]
+
+        deck = pdk.Deck(
+            layers=layers,
+            initial_view_state=pdk.ViewState(
+                latitude=6.4,
+                longitude=-66.2,
+                zoom=5.2,
+                pitch=0,
+            ),
+            tooltip={
+                "html": (
+                    "<b>{nombre}</b><br/>"
+                    "<span>{tipo}</span><br/>"
+                    "<span>{tramo} ({coordenadas})</span><br/>"
+                    "<span>Nivel medio: {nivel_medio_txt}</span><br/>"
+                    "<span>{mae_txt}</span>"
+                ),
+                "style": {
+                    "backgroundColor": "#0E1117",
+                    "color": "#FAFAFA",
+                    "fontSize": "12px",
+                    "padding": "8px",
+                    "borderRadius": "6px",
+                },
+            },
+        )
+
+        map_col, tbl_col = st.columns([1.45, 1.0])
+        with map_col:
+            st.pydeck_chart(deck, width="stretch", height=380)
+        with tbl_col:
+            st_summary_tbl = map_river_df[
+                ["nombre", "tramo", "coordenadas", "nivel_medio_txt", "nivel_max_txt", "rol"]
+            ].rename(columns={
+                "nombre": "Estación (Orden Aguas Abajo)",
+                "tramo": "Tramo",
+                "coordenadas": "Lat / Lon",
+                "nivel_medio_txt": "Nivel Medio",
+                "nivel_max_txt": "Máximo Histórico",
+                "rol": "Rol en el Modelo (+14d)",
+            })
+            st.table(st_summary_tbl, border="horizontal", width="stretch", hide_index=True)
 
         with st.expander("ℹ️ Ver síntesis metodológica CRISP-DM y auditoría de calidad ETL (Antes vs. Después)", expanded=False):
             st.markdown(
