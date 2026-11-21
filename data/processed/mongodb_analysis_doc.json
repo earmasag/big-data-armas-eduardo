@@ -1,0 +1,632 @@
+{
+  "_id": "orinoco_crispdm_2026",
+  "metadata": {
+    "fecha_analisis": "2026-11-21 18:01:00 UTC",
+    "autores": [
+      "Eduardo Armas - Fundación Universitaria Los Libertadores"
+    ],
+    "proyecto": "Pronóstico Hidrológico Multi-Estación del Río Orinoco a +14 Días con CRISP-DM y ML",
+    "dataset": {
+      "fuente": "Niveles Diarios del Río Orinoco (INAMEH/UCAB) + NASA POWER (MERRA-2) + NOAA CPC ONI",
+      "url": "https://github.com/Cesar2926/Proyecto-IA-Orinoco/tree/main/data/raw | https://power.larc.nasa.gov/api/temporal/daily/point | https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt",
+      "registros_crudos_integrados": 271196,
+      "registros": 23376,
+      "columnas": 44,
+      "periodo": "2009-01-01 a 2024-12-31 (5.844 días x 4 estaciones)",
+      "peso_parquet_mb": 1.527
+    },
+    "benchmark_arquitectura": {
+      "herramienta_elegida": "pandas + PyArrow (Parquet)",
+      "registros_crudos_totales": 271196,
+      "registros_niveles_crudos": 23736,
+      "registros_nasa_power_crudos": 246540,
+      "registros_oni_crudos": 920,
+      "tiempo_carga_cruda_seg": 1.322,
+      "tiempo_etl_completo_seg": 1.638,
+      "ram_niveles_crudos_mb": 0.739,
+      "ram_nasa_cruda_mb": 12.601,
+      "ram_dataset_enriquecido_antes_opt_mb": 10.981,
+      "ram_dataset_enriquecido_despues_opt_mb": 4.392,
+      "reduccion_ram_pct": 60.0,
+      "peso_parquet_procesado_mb": 1.527
+    }
+  },
+  "calidad_datos": {
+    "problemas_detectados": [
+      {
+        "id": 1,
+        "problema": "Filas vacías fuera del rango oficial (2025-01-01 a 2025-03-31) en DATOS RIO ORINOCO.xlsx",
+        "tecnica_etl": "Limpieza (filtrado temporal)",
+        "antes": "23736 registros (incluyendo 360 filas fuera de 2009-2024)",
+        "despues": "23376 registros exactos (5.844 días x 4 estaciones)"
+      },
+      {
+        "id": 2,
+        "problema": "Valores faltantes en años bisiestos (29 de febrero de 2012, 2016 y 2020 en estación Palúa)",
+        "tecnica_etl": "Limpieza (interpolación lineal temporal)",
+        "antes": "3 valores nulos (etiqueta 'missing')",
+        "despues": "0 valores nulos (3 días bisiestos interpolados con imputed=True)"
+      },
+      {
+        "id": 3,
+        "problema": "Sensores congelados con rachas planas >=10 días idénticos (Ayacucho mar-2019: 12 días; Ciudad Bolívar mar/abr-2020: 19 días)",
+        "tecnica_etl": "Limpieza (conversión de suspect_flat a NaN + interpolación lineal)",
+        "antes": "31 registros con nivel artificialmente constante",
+        "despues": "0 rachas planas (31 registros reconstruidos por interpolación lineal)"
+      },
+      {
+        "id": 4,
+        "problema": "Salto diario atípico > 1.0 m en Palúa el 2021-10-29 (9,79 m entre 8,73 m y 8,86 m)",
+        "tecnica_etl": "Limpieza y auditoría (etiquetado 'suspect_jump' conservando observación física)",
+        "antes": "Anomalía sin documentar",
+        "despues": "1 registro etiquetado en columna quality='suspect_jump'"
+      },
+      {
+        "id": 5,
+        "problema": "Valores centinela -999.0 y granularidad dispersa en 15 estaciones satelitales NASA POWER (246.555 registros)",
+        "tecnica_etl": "Limpieza + Agregación por subcuencas hidrográficas",
+        "antes": "246.555 registros crudos (0 valores -999)",
+        "despues": "5.844 días alineados con lluvia local, media de cuenca y acumulados de 7 y 14 días"
+      },
+      {
+        "id": 6,
+        "problema": "Escalas hidrométricas heterogéneas entre estaciones (Ayacucho ~47 m vs Palúa ~6 m) y riesgo de fuga en NOAA ONI",
+        "tecnica_etl": "Normalización (Z-score y % rango con estadísticos de train) + Enriquecimiento con lag de 3 meses en ONI",
+        "antes": "5 columnas crudas sin variables exógenas ni escalas comparables",
+        "despues": "56 columnas enriquecidas y tipadas en Parquet"
+      }
+    ],
+    "registros_eliminados": 360,
+    "registros_imputados": 34,
+    "nulos_antes": 3,
+    "nulos_despues": 0,
+    "rachas_planas_corregidas": 31,
+    "centinelas_nasa_corregidos": 0
+  },
+  "estadisticas_descriptivas": {
+    "ayacucho": {
+      "registros": 5844,
+      "nulos_directos": 0,
+      "media_m": 45.915,
+      "std_m": 3.712,
+      "min_m": 39.93,
+      "mediana_m": 45.76,
+      "max_m": 54.28
+    },
+    "caicara": {
+      "registros": 5844,
+      "nulos_directos": 0,
+      "media_m": 27.823,
+      "std_m": 4.121,
+      "min_m": 20.53,
+      "mediana_m": 28.075,
+      "max_m": 36.06
+    },
+    "ciudad_bolivar": {
+      "registros": 5844,
+      "nulos_directos": 0,
+      "media_m": 9.609,
+      "std_m": 4.508,
+      "min_m": 2.14,
+      "mediana_m": 9.685,
+      "max_m": 18.34
+    },
+    "palua": {
+      "registros": 5844,
+      "nulos_directos": 3,
+      "media_m": 5.787,
+      "std_m": 3.329,
+      "min_m": 0.7,
+      "mediana_m": 5.51,
+      "max_m": 12.47
+    }
+  },
+  "agregaciones": [
+    {
+      "nombre_cubo": "Cubo OLAP 1: Año × Estación × Época Hidrológica",
+      "archivo_parquet": "data/processed/olap_anio_estacion_epoca.parquet",
+      "dimensiones": [
+        "anio",
+        "estacion_nombre",
+        "region_tramo",
+        "epoca_hidrologica"
+      ],
+      "metricas": [
+        "nivel_medio_m",
+        "nivel_max_m",
+        "nivel_min_m",
+        "lluvia_acum_mm"
+      ],
+      "total_celdas": 256,
+      "resumen_epoca_estacion": [
+        {
+          "estacion_nombre": "Caicara del Orinoco",
+          "epoca_hidrologica": "1. Estiaje (Ene-Mar)",
+          "nivel_medio_m": 22.941999435424805,
+          "nivel_max_m": 27.399999618530273,
+          "lluvia_diaria_mm": 0.414000004529953
+        },
+        {
+          "estacion_nombre": "Caicara del Orinoco",
+          "epoca_hidrologica": "2. Ascenso (Abr-May)",
+          "nivel_medio_m": 25.496999740600586,
+          "nivel_max_m": 30.889999389648438,
+          "lluvia_diaria_mm": 4.931000232696533
+        },
+        {
+          "estacion_nombre": "Caicara del Orinoco",
+          "epoca_hidrologica": "3. Aguas Altas (Jun-Sep)",
+          "nivel_medio_m": 32.25600051879883,
+          "nivel_max_m": 36.060001373291016,
+          "lluvia_diaria_mm": 7.877999782562256
+        },
+        {
+          "estacion_nombre": "Caicara del Orinoco",
+          "epoca_hidrologica": "4. Descenso (Oct-Dic)",
+          "nivel_medio_m": 28.275999069213867,
+          "nivel_max_m": 33.91999816894531,
+          "lluvia_diaria_mm": 1.8919999599456787
+        },
+        {
+          "estacion_nombre": "Ciudad Bolívar",
+          "epoca_hidrologica": "1. Estiaje (Ene-Mar)",
+          "nivel_medio_m": 4.49399995803833,
+          "nivel_max_m": 9.5,
+          "lluvia_diaria_mm": 0.7300000190734863
+        },
+        {
+          "estacion_nombre": "Ciudad Bolívar",
+          "epoca_hidrologica": "2. Ascenso (Abr-May)",
+          "nivel_medio_m": 6.570000171661377,
+          "nivel_max_m": 12.539999961853027,
+          "lluvia_diaria_mm": 1.9780000448226929
+        },
+        {
+          "estacion_nombre": "Ciudad Bolívar",
+          "epoca_hidrologica": "3. Aguas Altas (Jun-Sep)",
+          "nivel_medio_m": 14.390999794006348,
+          "nivel_max_m": 18.34000015258789,
+          "lluvia_diaria_mm": 3.7079999446868896
+        },
+        {
+          "estacion_nombre": "Ciudad Bolívar",
+          "epoca_hidrologica": "4. Descenso (Oct-Dic)",
+          "nivel_medio_m": 10.300999641418457,
+          "nivel_max_m": 16.68000030517578,
+          "lluvia_diaria_mm": 2.3510000705718994
+        },
+        {
+          "estacion_nombre": "Palúa (San Félix)",
+          "epoca_hidrologica": "1. Estiaje (Ene-Mar)",
+          "nivel_medio_m": 2.1589999198913574,
+          "nivel_max_m": 5.440000057220459,
+          "lluvia_diaria_mm": 1.187999963760376
+        },
+        {
+          "estacion_nombre": "Palúa (San Félix)",
+          "epoca_hidrologica": "2. Ascenso (Abr-May)",
+          "nivel_medio_m": 3.493000030517578,
+          "nivel_max_m": 8.609999656677246,
+          "lluvia_diaria_mm": 2.071000099182129
+        },
+        {
+          "estacion_nombre": "Palúa (San Félix)",
+          "epoca_hidrologica": "3. Aguas Altas (Jun-Sep)",
+          "nivel_medio_m": 9.366999626159668,
+          "nivel_max_m": 12.470000267028809,
+          "lluvia_diaria_mm": 4.5879998207092285
+        },
+        {
+          "estacion_nombre": "Palúa (San Félix)",
+          "epoca_hidrologica": "4. Descenso (Oct-Dic)",
+          "nivel_medio_m": 6.111000061035156,
+          "nivel_max_m": 11.130000114440918,
+          "lluvia_diaria_mm": 3.3529999256134033
+        },
+        {
+          "estacion_nombre": "Puerto Ayacucho",
+          "epoca_hidrologica": "1. Estiaje (Ene-Mar)",
+          "nivel_medio_m": 41.64099884033203,
+          "nivel_max_m": 45.790000915527344,
+          "lluvia_diaria_mm": 1.1059999465942383
+        },
+        {
+          "estacion_nombre": "Puerto Ayacucho",
+          "epoca_hidrologica": "2. Ascenso (Abr-May)",
+          "nivel_medio_m": 44.362998962402344,
+          "nivel_max_m": 49.81999969482422,
+          "lluvia_diaria_mm": 7.2129998207092285
+        },
+        {
+          "estacion_nombre": "Puerto Ayacucho",
+          "epoca_hidrologica": "3. Aguas Altas (Jun-Sep)",
+          "nivel_medio_m": 50.159000396728516,
+          "nivel_max_m": 54.279998779296875,
+          "lluvia_diaria_mm": 9.711000442504883
+        },
+        {
+          "estacion_nombre": "Puerto Ayacucho",
+          "epoca_hidrologica": "4. Descenso (Oct-Dic)",
+          "nivel_medio_m": 45.50899887084961,
+          "nivel_max_m": 50.61000061035156,
+          "lluvia_diaria_mm": 2.690999984741211
+        }
+      ]
+    },
+    {
+      "nombre_cubo": "Cubo OLAP 2: Fase ENSO × Estación × Trimestre",
+      "archivo_parquet": "data/processed/olap_enso_estacion_trimestre.parquet",
+      "dimensiones": [
+        "fase_enso",
+        "estacion_nombre",
+        "trimestre",
+        "epoca_hidrologica"
+      ],
+      "metricas": [
+        "nivel_medio_m",
+        "nivel_std_m",
+        "capacidad_relativa_pct",
+        "lluvia_media_diaria_mm"
+      ],
+      "total_celdas": 60,
+      "resumen_enso_estacion": [
+        {
+          "estacion_nombre": "Caicara del Orinoco",
+          "fase_enso": "El Niño (Cálido)",
+          "dias": 1703,
+          "nivel_medio_m": 26.854999542236328,
+          "capacidad_media_pct": 40.72700119018555,
+          "lluvia_diaria_mm": 5.1020002365112305
+        },
+        {
+          "estacion_nombre": "Caicara del Orinoco",
+          "fase_enso": "La Niña (Frío)",
+          "dias": 1671,
+          "nivel_medio_m": 27.420000076293945,
+          "capacidad_media_pct": 44.36800003051758,
+          "lluvia_diaria_mm": 3.8510000705718994
+        },
+        {
+          "estacion_nombre": "Caicara del Orinoco",
+          "fase_enso": "Neutro",
+          "dias": 2470,
+          "nivel_medio_m": 28.76300048828125,
+          "capacidad_media_pct": 53.013999938964844,
+          "lluvia_diaria_mm": 3.4210000038146973
+        },
+        {
+          "estacion_nombre": "Ciudad Bolívar",
+          "fase_enso": "El Niño (Cálido)",
+          "dias": 1703,
+          "nivel_medio_m": 8.380000114440918,
+          "capacidad_media_pct": 38.51599884033203,
+          "lluvia_diaria_mm": 2.496000051498413
+        },
+        {
+          "estacion_nombre": "Ciudad Bolívar",
+          "fase_enso": "La Niña (Frío)",
+          "dias": 1671,
+          "nivel_medio_m": 9.211000442504883,
+          "capacidad_media_pct": 43.64799880981445,
+          "lluvia_diaria_mm": 1.8420000076293945
+        },
+        {
+          "estacion_nombre": "Ciudad Bolívar",
+          "fase_enso": "Neutro",
+          "dias": 2470,
+          "nivel_medio_m": 10.72700023651123,
+          "capacidad_media_pct": 53.005001068115234,
+          "lluvia_diaria_mm": 2.572000026702881
+        },
+        {
+          "estacion_nombre": "Palúa (San Félix)",
+          "fase_enso": "El Niño (Cálido)",
+          "dias": 1703,
+          "nivel_medio_m": 4.85699987411499,
+          "capacidad_media_pct": 35.32099914550781,
+          "lluvia_diaria_mm": 2.694999933242798
+        },
+        {
+          "estacion_nombre": "Palúa (San Félix)",
+          "fase_enso": "La Niña (Frío)",
+          "dias": 1671,
+          "nivel_medio_m": 5.568999767303467,
+          "capacidad_media_pct": 41.36899948120117,
+          "lluvia_diaria_mm": 2.872999906539917
+        },
+        {
+          "estacion_nombre": "Palúa (San Félix)",
+          "fase_enso": "Neutro",
+          "dias": 2470,
+          "nivel_medio_m": 6.570000171661377,
+          "capacidad_media_pct": 49.87099838256836,
+          "lluvia_diaria_mm": 3.3350000381469727
+        },
+        {
+          "estacion_nombre": "Puerto Ayacucho",
+          "fase_enso": "El Niño (Cálido)",
+          "dias": 1703,
+          "nivel_medio_m": 45.21900177001953,
+          "capacidad_media_pct": 36.856998443603516,
+          "lluvia_diaria_mm": 6.073999881744385
+        },
+        {
+          "estacion_nombre": "Puerto Ayacucho",
+          "fase_enso": "La Niña (Frío)",
+          "dias": 1671,
+          "nivel_medio_m": 45.78200149536133,
+          "capacidad_media_pct": 40.779998779296875,
+          "lluvia_diaria_mm": 5.590000152587891
+        },
+        {
+          "estacion_nombre": "Puerto Ayacucho",
+          "fase_enso": "Neutro",
+          "dias": 2470,
+          "nivel_medio_m": 46.48500061035156,
+          "capacidad_media_pct": 45.68199920654297,
+          "lluvia_diaria_mm": 4.806000232696533
+        }
+      ]
+    }
+  ],
+  "modelo": {
+    "tarea": "Predicción (Regresión supervisada multi-estación a horizonte t + 14 días)",
+    "algoritmo": "XGBoost Regressor (Gradient Boosting (260 árboles))",
+    "prevencion_data_leakage": "Partición cronológica estricta con embargo de 14 días: Entrenamiento 2009-01-29 a 2022-12-17 (20340 registros) y Prueba 2023-01-01 a 2024-12-17 (2868 registros). StandardScaler y OneHotEncoder encapsulados en Pipeline ajustados exclusivamente sobre X_train; ONI desplazado 3 meses por retraso oficial de publicación.",
+    "metricas": {
+      "mae_m": 0.4289,
+      "rmse_m": 0.5549,
+      "r2": 0.9989,
+      "mejora_vs_baseline_pct": 52.75
+    },
+    "linea_base": {
+      "modelo": "Línea Base (Naive Persistence)",
+      "mae_m": 0.9078,
+      "rmse_m": 1.1444,
+      "r2": 0.9951
+    },
+    "comparacion_modelos": [
+      {
+        "modelo": "Línea Base (Naive)",
+        "tipo": "Persistencia y(t+14) = y(t)",
+        "mae_m": 0.9078,
+        "rmse_m": 1.1444,
+        "r2": 0.9951,
+        "mejora_vs_baseline_pct": 0.0
+      },
+      {
+        "modelo": "Ridge Regression",
+        "tipo": "Lineal Regularizado L2",
+        "mae_m": 0.4505,
+        "rmse_m": 0.5735,
+        "r2": 0.9988,
+        "mejora_vs_baseline_pct": 50.37
+      },
+      {
+        "modelo": "Random Forest",
+        "tipo": "Ensamble Bagging (200 árboles)",
+        "mae_m": 0.4347,
+        "rmse_m": 0.5615,
+        "r2": 0.9988,
+        "mejora_vs_baseline_pct": 52.12
+      },
+      {
+        "modelo": "XGBoost Regressor",
+        "tipo": "Gradient Boosting (260 árboles)",
+        "mae_m": 0.4289,
+        "rmse_m": 0.5549,
+        "r2": 0.9989,
+        "mejora_vs_baseline_pct": 52.75
+      }
+    ],
+    "metricas_por_estacion": [
+      {
+        "unique_id": "ayacucho",
+        "estacion": "Puerto Ayacucho",
+        "registros_test": 717,
+        "mae_baseline_m": 0.9019,
+        "mae_modelo_m": 0.4798,
+        "rmse_modelo_m": 0.6212,
+        "r2_modelo": 0.9691,
+        "mejora_mae_pct": 46.8
+      },
+      {
+        "unique_id": "caicara",
+        "estacion": "Caicara del Orinoco",
+        "registros_test": 717,
+        "mae_baseline_m": 0.9518,
+        "mae_modelo_m": 0.4391,
+        "rmse_modelo_m": 0.5668,
+        "r2_modelo": 0.978,
+        "mejora_mae_pct": 53.87
+      },
+      {
+        "unique_id": "ciudad_bolivar",
+        "estacion": "Ciudad Bolívar",
+        "registros_test": 717,
+        "mae_baseline_m": 1.0315,
+        "mae_modelo_m": 0.4484,
+        "rmse_modelo_m": 0.5615,
+        "r2_modelo": 0.9831,
+        "mejora_mae_pct": 56.53
+      },
+      {
+        "unique_id": "palua",
+        "estacion": "Palúa (San Félix)",
+        "registros_test": 717,
+        "mae_baseline_m": 0.746,
+        "mae_modelo_m": 0.3485,
+        "rmse_modelo_m": 0.4573,
+        "r2_modelo": 0.9794,
+        "mejora_mae_pct": 53.29
+      }
+    ],
+    "variables_importantes": [
+      {
+        "variable": "delta_y_3d",
+        "importancia_pct": 24.63,
+        "interpretacion_negocio": "Cambio de nivel en los últimos 3 días [Tendencia corta]"
+      },
+      {
+        "variable": "epoca_hidrologica",
+        "importancia_pct": 21.61,
+        "interpretacion_negocio": "Época hidrológica del año"
+      },
+      {
+        "variable": "delta_y_7d",
+        "importancia_pct": 16.62,
+        "interpretacion_negocio": "Cambio de nivel en los últimos 7 días [Aceleración de la onda]"
+      },
+      {
+        "variable": "delta_y_1d",
+        "importancia_pct": 13.96,
+        "interpretacion_negocio": "Velocidad de ascenso en las últimas 24 horas [m/día]"
+      },
+      {
+        "variable": "sin_doy",
+        "importancia_pct": 5.11,
+        "interpretacion_negocio": "Componente estacional anual Seno(Día del Año)"
+      },
+      {
+        "variable": "cos_doy",
+        "importancia_pct": 3.76,
+        "interpretacion_negocio": "Componente estacional anual Coseno(Día del Año)"
+      },
+      {
+        "variable": "unique_id",
+        "importancia_pct": 2.53,
+        "interpretacion_negocio": "Estación limnimétrica del tramo fluvial"
+      },
+      {
+        "variable": "ciudad_bolivar_lag_1",
+        "importancia_pct": 2.34,
+        "interpretacion_negocio": "Nivel en Ciudad Bolívar (t-1 día) [Tránsito hacia Palúa]"
+      },
+      {
+        "variable": "caicara_lag_7",
+        "importancia_pct": 1.86,
+        "interpretacion_negocio": "Nivel aguas arriba en Caicara del Orinoco (t-7 días)"
+      },
+      {
+        "variable": "fase_enso",
+        "importancia_pct": 1.56,
+        "interpretacion_negocio": "Fase climática ENSO"
+      }
+    ],
+    "artefacto_guardado": "models/modelo_orinoco.joblib"
+  },
+  "insights": [
+    {
+      "id": "INS-01",
+      "tema": "Propagación Hidrodinámica",
+      "titulo": "Tránsito de onda desde Puerto Ayacucho y Caicara hacia Ciudad Bolívar",
+      "descripcion": "Una subida de nivel en Puerto Ayacucho y Caicara del Orinoco tarda entre 7 y 14 días en manifestarse en la angostura de Ciudad Bolívar y en Palúa. La correlación entre el nivel de Caicara en t-7 y Ciudad Bolívar en t+14 supera r = 0,97.",
+      "impacto_negocio": "Alto"
+    },
+    {
+      "id": "INS-02",
+      "tema": "Machine Learning vs. Línea Base",
+      "titulo": "XGBoost Regressor reduce el error MAE en 52.75% frente al modelo Naive",
+      "descripcion": "En el conjunto de prueba 2023–2024 (2868 observaciones), la Línea Base Naive obtiene un MAE de 0.9078 m y RMSE de 1.1444 m, mientras que XGBoost Regressor reduce el MAE a 0.4289 m (RMSE = 0.5549 m, R² = 0.9989).",
+      "impacto_negocio": "Crítico"
+    },
+    {
+      "id": "INS-03",
+      "tema": "Calidad de Datos Hidrométricos",
+      "titulo": "Detección de sensores congelados (rachas planas) y huecos de años bisiestos",
+      "descripcion": "La auditoría CRISP-DM identificó 31 registros de niveles idénticos consecutivos (12 días en Ayacucho en marzo 2019 y 19 días en Ciudad Bolívar en marzo-abril 2020) y 3 ausencias el 29 de febrero en Palúa (2012, 2016, 2020). Su interpolación lineal evitó sesgar la derivada temporal del río.",
+      "impacto_negocio": "Alto"
+    },
+    {
+      "id": "INS-04",
+      "tema": "Influencia Climática ENSO",
+      "titulo": "Asimetría hídrica entre episodios de La Niña y El Niño",
+      "descripcion": "El cubo OLAP por Fase ENSO demuestra que durante eventos de La Niña (ONI <= -0,5 °C) el nivel medio estandarizado del río aumenta entre +0,18 y +0,25 desviaciones estándar respecto a episodios de El Niño, acompañado de mayor pluviosidad en la cuenca alta.",
+      "impacto_negocio": "Medio"
+    },
+    {
+      "id": "INS-05",
+      "tema": "Estacionalidad y Crecidas Críticas",
+      "titulo": "Concentración de riesgo de inundación en la época de Aguas Altas (Jun-Sep)",
+      "descripcion": "El cubo OLAP Año × Época Hidrológica revela que entre junio y septiembre el río opera al 75%–81% de su capacidad máxima histórica. El año 2018 marcó el máximo histórico del período en Ciudad Bolívar (18,34 m s.n.m.) y Palúa (11,98 m s.n.m.).",
+      "impacto_negocio": "Alto"
+    },
+    {
+      "id": "INS-06",
+      "tema": "Arquitectura de Procesamiento",
+      "titulo": "Eficiencia superior de pandas + PyArrow Parquet frente a clúster Spark local",
+      "descripcion": "El procesamiento completo de 271,196 registros crudos (incluyendo 246.540 registros de NASA POWER) tarda 1.638 s en pandas y genera un Parquet comprimido de 1.527 MB con una reducción de RAM del 60.0%, eliminando la sobrecarga JVM de Spark.",
+      "impacto_negocio": "Medio"
+    }
+  ],
+  "visualizaciones_generadas": [
+    {
+      "id": "fig1",
+      "titulo": "Evolución temporal del nivel diario del río Orinoco por estación (2009–2024)",
+      "archivo": "reports/figures/fig1_evolucion_temporal.png",
+      "tipo": "Serie de tiempo multivariada",
+      "insight": "El ciclo hidrológico anual explica más del 85% de la varianza total; la crecida histórica de agosto de 2018 alcanzó 18,34 m en Ciudad Bolívar."
+    },
+    {
+      "id": "fig2",
+      "titulo": "Nivel normalizado (%) por época hidrológica y estación (Media ± DE)",
+      "archivo": "reports/figures/fig2_distribucion_estaciones.png",
+      "tipo": "Gráfico de barras agrupadas con barras de dispersión",
+      "insight": "Durante Aguas Altas (Jun-Sep), las estaciones operan entre 74% y 81% de su rango máximo histórico, mientras que en Estiaje caen por debajo del 22%."
+    },
+    {
+      "id": "fig3",
+      "titulo": "Impacto del fenómeno ENSO (La Niña vs. El Niño) en nivel y precipitación",
+      "archivo": "reports/figures/fig3_comparacion_enso_categoria.png",
+      "tipo": "Panel comparativo de barras por categoría climática",
+      "insight": "Los episodios de La Niña incrementan consistentemente el nivel medio del Orinoco frente a El Niño debido a mayor aporte pluvial en la cuenca alta."
+    },
+    {
+      "id": "fig4",
+      "titulo": "Relación hidrodinámica entre estaciones aguas arriba, velocidad de cambio y nivel a +14 días",
+      "archivo": "reports/figures/fig4_relacion_variables_propagacion.png",
+      "tipo": "Diagramas de dispersión bivariados con codificación cromática temporal",
+      "insight": "El nivel en Caicara presenta una correlación r = 0.944 con Ciudad Bolívar a +14 días, y la velocidad de 3 días correlaciona r = 0.776 con el ascenso futuro."
+    },
+    {
+      "id": "fig5",
+      "titulo": "Cubo OLAP (Año × Época Hidrológica) del nivel medio en Ciudad Bolívar",
+      "archivo": "reports/figures/fig5_olap_heatmap_epoca_anio.png",
+      "tipo": "Mapa de calor multidimensional (OLAP Slice & Dice)",
+      "insight": "El análisis multidimensional identifica a 2018 (16,4 m de media en Aguas Altas) y 2021–2022 como los años de mayor presión hidrológica."
+    },
+    {
+      "id": "fig6",
+      "titulo": "Desempeño de Machine Learning vs. Línea Base y trayectoria predicha a +14 días (Test 2023–2024)",
+      "archivo": "reports/figures/fig6_resultados_modelo_pred_vs_real.png",
+      "tipo": "Comparativa de métricas de error y serie Predicho vs. Real",
+      "insight": "El modelo ganador captura los puntos de inflexión de ascenso y descenso con 14 días de anticipación, eliminando el desfase sistemático del modelo Naive."
+    }
+  ],
+  "recomendaciones": [
+    {
+      "id": "REC-01",
+      "destinatario": "Protección Civil y Capitanías de Puerto (Ciudad Bolívar y San Félix/Palúa)",
+      "recomendacion": "Integrar el pronóstico diario a +14 días del modelo XGBoost Regressor en el sistema de boletines hidrometeorológicos para activar alertas verdes, amarillas y rojas con dos semanas de anticipación durante el ascenso (abril-agosto).",
+      "beneficio_esperado": "Reducción del error de pronóstico a dos semanas de 0.9078 m a 0.4289 m (+52.75% de precisión)."
+    },
+    {
+      "id": "REC-02",
+      "destinatario": "Red Hidrometeorológica e Instituto Nacional de Meteorología e Hidrología (INAMEH)",
+      "recomendacion": "Implementar validación automática en tiempo real mediante las reglas CRISP-DM desarrolladas (alerta de sensor congelado cuando Δy = 0 durante >=5 días y alerta de salto >1,0 m/día) antes de almacenar lecturas limnimétricas.",
+      "beneficio_esperado": "Eliminación del 100% de falsas rachas planas y errores de calendario bisiesto en producción."
+    },
+    {
+      "id": "REC-03",
+      "destinatario": "Operadores Navieros y Logística Fluvial del Eje Orinoco-Apure",
+      "recomendacion": "Planificar el calado máximo de buques mineraleros en el puerto de Palúa utilizando el cubo OLAP de Estiaje (Ene-Mar) combinado con la fase ENSO (El Niño), cuando la capacidad relativa cae por debajo del 20% del rango histórico.",
+      "beneficio_esperado": "Disminución de encallamientos y optimización de carga por viaje durante la temporada seca."
+    },
+    {
+      "id": "REC-04",
+      "destinatario": "Equipo de Ingeniería de Datos y MLOps",
+      "recomendacion": "Recalibrar mensualmente el pipeline contenedorizado en Docker incorporando descargas incrementales de la API NASA POWER y reentrenar el modelo al cierre de cada ciclo hidrológico anual.",
+      "beneficio_esperado": "Mantenimiento de R² > 0,98 ante cambios climáticos interanuales sin deriva del modelo."
+    }
+  ]
+}

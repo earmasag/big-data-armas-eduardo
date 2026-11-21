@@ -1,0 +1,92 @@
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: orinoco_mongodb
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-changeme}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-changeme}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - bigdata_net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  procesamiento:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: orinoco_procesamiento
+    env_file:
+      - .env
+    environment:
+      MONGO_URI: ${MONGO_URI:-mongodb://changeme:changeme@mongodb:27017/?authSource=admin}
+      MONGO_DB: ${MONGO_DB:-orinoco_bigdata}
+      MONGO_COLLECTION: ${MONGO_COLLECTION:-analisis_crispdm}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    volumes:
+      - ./data:/workspace/data
+      - ./models:/workspace/models
+      - ./reports:/workspace/reports
+      - ./notebooks:/workspace/notebooks
+      - ./src:/workspace/src
+    networks:
+      - bigdata_net
+    command: >
+      sh -c "python -m src.run_all &&
+             jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''"
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: orinoco_streamlit_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MONGO_URI: ${MONGO_URI:-mongodb://changeme:changeme@mongodb:27017/?authSource=admin}
+      MONGO_DB: ${MONGO_DB:-orinoco_bigdata}
+      MONGO_COLLECTION: ${MONGO_COLLECTION:-analisis_crispdm}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      procesamiento:
+        condition: service_started
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    volumes:
+      - ./data:/workspace/data
+      - ./models:/workspace/models
+      - ./reports:/workspace/reports
+      - ./app:/workspace/app
+      - ./src:/workspace/src
+    networks:
+      - bigdata_net
+    command: >
+      sh -c "until [ -f data/processed/orinoco_limpio.parquet ] &&
+      [ -f models/modelo_orinoco.joblib ] &&
+      [ -f reports/reporte_bigdata_orinoco.pdf ]; do
+      echo 'Esperando artefactos del pipeline (orinoco_limpio.parquet, modelo_orinoco.joblib, reporte_bigdata_orinoco.pdf)...';
+      sleep 10;
+      done &&
+      exec streamlit run app/app.py --server.port=8501 --server.address=0.0.0.0"
+
+volumes:
+  mongo_data:
+
+networks:
+  bigdata_net:
+    driver: bridge

@@ -1,0 +1,10 @@
+# Entornos y credenciales
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Datos crudos pesados (se regeneran con python -m src.download_data)
+data/raw/*
+!data/raw/.gitkeep
