@@ -14,6 +14,7 @@ Secciones obligatorias:
 
 from __future__ import annotations
 
+import html
 import sys
 from pathlib import Path
 from typing import Any
@@ -39,19 +40,6 @@ st.set_page_config(
     page_title="Big Data Orinoco — CRISP-DM + ML + MongoDB",
     page_icon="🌊",
     layout="wide",
-)
-
-st.markdown(
-    """
-    <style>
-    [data-testid="stTable"] td, [data-testid="stTable"] th {
-        white-space: normal !important;
-        word-break: break-word;
-        vertical-align: top;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
 )
 
 # Paleta accesible Okabe-Ito (consistente con las figuras del estudio)
@@ -113,7 +101,41 @@ def load_trained_artifact() -> dict[str, Any]:
     if not MODEL_ARTIFACT_PATH.exists():
         from src.run_all import execute_full_pipeline
         execute_full_pipeline()
-    return joblib.load(MODEL_ARTIFACT_PATH)
+    try:
+        return joblib.load(MODEL_ARTIFACT_PATH)
+    except Exception:
+        # Fallback multiplataforma (Linux Docker -> Windows): si XGBoost falla al leer
+        # el estado RNG en Config, extrae únicamente el bloque Model UBJSON del Booster.
+        import xgboost as xgb
+        import xgboost.core as xc
+
+        orig_setstate = xc.Booster.__setstate__
+
+        def _cross_os_setstate(self: Any, state: dict[str, Any]) -> None:
+            try:
+                orig_setstate(self, state)
+            except xc.XGBoostError:
+                raw = state.get("handle")
+                if raw is None:
+                    raise
+                buf = bytes(raw)
+                marker = b"L\x00\x00\x00\x00\x00\x00\x00\x05Model{"
+                pos_m = buf.find(marker)
+                if pos_m == -1:
+                    raise
+                model_ubj = bytearray(buf[pos_m + len(marker) - 1 : -1])
+                booster = xgb.Booster()
+                booster.load_model(model_ubj)
+                new_state = dict(state)
+                new_state["handle"] = booster.handle
+                booster.handle = None
+                self.__dict__.update(new_state)
+
+        xc.Booster.__setstate__ = _cross_os_setstate
+        try:
+            return joblib.load(MODEL_ARTIFACT_PATH)
+        finally:
+            xc.Booster.__setstate__ = orig_setstate
 
 
 def _get_scenario_values(
@@ -220,6 +242,13 @@ STATION_ROLES = {
     "palua": "4. Confluencia Caroní (puerto multimodal y calado naviero)",
 }
 
+STATION_LABEL_OFFSETS = {
+    "ayacucho": [0, -24],
+    "caicara": [-12, -24],
+    "ciudad_bolivar": [-30, 26],
+    "palua": [22, -24],
+}
+
 
 def _build_map_dataframe(mongo_doc: dict[str, Any], include_nasa: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Construye los DataFrames geográficos para las 4 estaciones hidrométricas y 11 puntos NASA POWER."""
@@ -250,6 +279,7 @@ def _build_map_dataframe(mongo_doc: dict[str, Any], include_nasa: bool) -> tuple
             "rol": STATION_ROLES[st_id],
             "color": STATION_RGB[st_id],
             "radius": 24000,
+            "label_offset": STATION_LABEL_OFFSETS[st_id],
         })
 
     river_df = pd.DataFrame(river_rows)
@@ -279,7 +309,697 @@ def _build_map_dataframe(mongo_doc: dict[str, Any], include_nasa: bool) -> tuple
     return pd.DataFrame(all_rows), river_df
 
 
+def _inject_dashboard_css() -> None:
+    """Inyecta el sistema visual Minimalist Slate sobre la app Streamlit."""
+    st.markdown(
+        """<style>
+:root, .stApp, [data-testid="stAppViewContainer"] {
+    color-scheme: light !important;
+    background-color: #F8F9FA !important;
+    color: #0F172A !important;
+}
+[data-testid="stHeader"] {
+    background-color: rgba(248, 249, 250, 0.94) !important;
+    color: #0F172A !important;
+    backdrop-filter: blur(6px);
+}
+[data-testid="stHeader"] button, [data-testid="stHeader"] svg {
+    color: #334155 !important;
+    fill: currentColor;
+}
+[data-testid="stMainBlockContainer"] {
+    padding-top: 1.5rem;
+    padding-bottom: 2.5rem;
+    max-width: 1440px;
+}
+/* Garantizar alto contraste en etiquetas, captions, tablas, expanders y widgets */
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] span,
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stCaptionContainer"] p,
+.stRadio label,
+.stRadio p,
+.stCheckbox label,
+.stCheckbox p {
+    color: #1E293B !important;
+}
+[data-testid="stCaptionContainer"] p {
+    color: #475569 !important;
+}
+[data-testid="stMarkdownContainer"] code,
+[data-testid="stCaptionContainer"] code,
+code {
+    color: #0F172A !important;
+    background-color: #E2E8F0 !important;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+}
+/* Tablas estáticas st.table */
+[data-testid="stTable"] table {
+    background-color: #FFFFFF !important;
+    color: #0F172A !important;
+}
+[data-testid="stTable"] th {
+    background-color: #F8FAFC !important;
+    color: #334155 !important;
+    font-weight: 700 !important;
+    border-color: #E2E8F0 !important;
+    white-space: normal !important;
+    word-break: break-word;
+    vertical-align: top;
+}
+[data-testid="stTable"] td {
+    background-color: #FFFFFF !important;
+    color: #0F172A !important;
+    border-color: #E2E8F0 !important;
+    white-space: normal !important;
+    word-break: break-word;
+    vertical-align: top;
+}
+/* Inputs, selects, multiselects, expanders y segmented controls */
+[data-baseweb="select"] > div,
+[data-baseweb="input"] > div,
+[data-baseweb="base-input"],
+[data-testid="stNumberInputContainer"] {
+    background-color: #FFFFFF !important;
+    color: #0F172A !important;
+    border-color: #CBD5E1 !important;
+}
+[data-baseweb="select"] > div {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 2.5rem !important;
+}
+[data-baseweb="select"] > div > div,
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div > div > div {
+    flex-wrap: wrap !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    gap: 0.25rem !important;
+}
+[data-baseweb="select"] span,
+[data-baseweb="select"] input,
+[data-baseweb="input"] input,
+[data-testid="stNumberInputContainer"] input,
+[data-testid="stNumberInputField"],
+input[type="number"],
+input[type="text"] {
+    color: #0F172A !important;
+    -webkit-text-fill-color: #0F172A !important;
+    background-color: #FFFFFF !important;
+}
+[data-testid="stMultiSelect"] span[data-baseweb="tag"],
+span[data-baseweb="tag"] {
+    background-color: #0072B2 !important;
+    color: #FFFFFF !important;
+    border: 1px solid #0072B2 !important;
+    max-width: 100% !important;
+}
+[data-testid="stMultiSelect"] span[data-baseweb="tag"] span,
+[data-testid="stMultiSelect"] span[data-baseweb="tag"] svg,
+span[data-baseweb="tag"] span,
+span[data-baseweb="tag"] svg {
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    fill: currentColor !important;
+}
+[data-baseweb="popover"] ul,
+[role="listbox"] {
+    background-color: #FFFFFF !important;
+    color: #0F172A !important;
+}
+[data-testid="stNumberInputStepDown"],
+[data-testid="stNumberInputStepUp"] {
+    background-color: #F8FAFC !important;
+    color: #0F172A !important;
+    border-color: #CBD5E1 !important;
+}
+[data-testid="stExpander"] details {
+    background-color: #FFFFFF !important;
+    border: 1px solid #E2E8F0 !important;
+    border-radius: 10px !important;
+}
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary p {
+    color: #0F172A !important;
+    font-weight: 600 !important;
+}
+button[data-testid="stBaseButton-primary"],
+button[data-testid="stBaseButton-primaryFormSubmit"],
+button[kind="primary"],
+button[kind="primaryFormSubmit"],
+[data-testid="stFormSubmitButton"] button,
+[data-testid="stDownloadButton"] button {
+    background-color: #0072B2 !important;
+    border-color: #0072B2 !important;
+    color: #FFFFFF !important;
+}
+button[data-testid="stBaseButton-primary"] p,
+button[data-testid="stBaseButton-primaryFormSubmit"] p,
+button[kind="primary"] p,
+button[kind="primaryFormSubmit"] p,
+[data-testid="stFormSubmitButton"] button p,
+[data-testid="stDownloadButton"] button p {
+    color: #FFFFFF !important;
+}
+button[data-testid="stBaseButton-primary"]:hover,
+button[data-testid="stBaseButton-primaryFormSubmit"]:hover,
+button[kind="primary"]:hover,
+button[kind="primaryFormSubmit"]:hover,
+[data-testid="stFormSubmitButton"] button:hover,
+[data-testid="stDownloadButton"] button:hover {
+    background-color: #035A8C !important;
+    border-color: #035A8C !important;
+}
+[data-testid="stSegmentedControl"] button,
+[data-baseweb="button-group"] button,
+button[data-testid="stBaseButton-segmented_control"],
+button[kind="segmented_control"] {
+    background-color: #FFFFFF !important;
+    color: #334155 !important;
+    border-color: #CBD5E1 !important;
+}
+[data-testid="stSegmentedControl"] button p,
+[data-baseweb="button-group"] button p {
+    color: inherit !important;
+}
+[data-testid="stSegmentedControl"] button[aria-checked="true"],
+[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+[data-baseweb="button-group"] button[aria-pressed="true"],
+button[data-testid="stBaseButton-segmented_controlActive"],
+button[kind="segmented_controlActive"],
+button[data-testid="stBaseButton-pillsActive"],
+button[kind="pillsActive"] {
+    background-color: #EFF6FF !important;
+    color: #0072B2 !important;
+    border-color: #0072B2 !important;
+    font-weight: 700 !important;
+}
+button[data-testid="stBaseButton-pills"],
+button[kind="pills"] {
+    background-color: #FFFFFF !important;
+    color: #475569 !important;
+    border-color: #CBD5E1 !important;
+}
+button[data-testid="stBaseButton-pills"] p,
+button[kind="pills"] p,
+button[data-testid="stBaseButton-pillsActive"] p,
+button[kind="pillsActive"] p {
+    color: inherit !important;
+}
+[data-testid="stAlert"],
+[data-testid="stAlert"] > div,
+[data-testid="stNotification"] {
+    background-color: #EFF6FF !important;
+    color: #0F172A !important;
+    border-color: #BAE6FD !important;
+}
+/* Tarjetas modulares (st.container(border=True)) */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background-color: #FFFFFF !important;
+    border: 1px solid #E2E8F0 !important;
+    border-radius: 12px !important;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    padding: 0.25rem 0.45rem;
+}
+/* Tarjetas desplegables alineadas en Pestaña 5 */
+[class*="st-key-aligned_cards_grid"] [data-testid="stExpander"] details {
+    background-color: #FFFFFF !important;
+    border: 1px solid #E2E8F0 !important;
+    border-radius: 10px !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+[class*="st-key-aligned_cards_grid"] [data-testid="stExpander"] summary {
+    min-height: 4.5rem;
+    display: flex;
+    align-items: center;
+    padding: 0.65rem 0.95rem;
+}
+[class*="st-key-aligned_cards_grid"] [data-testid="stExpander"] details[open] > summary {
+    background-color: #F8FAFC !important;
+    border-bottom: 1px solid #E2E8F0 !important;
+}
+[class*="st-key-aligned_cards_grid"] [data-testid="stExpander"] summary p {
+    line-height: 1.35;
+}
+[class*="st-key-aligned_cards_grid"] [data-testid="stExpanderDetails"] {
+    padding: 0.85rem 1.15rem 1.2rem 1.15rem !important;
+}
+[class*="st-key-aligned_cards_grid"] [data-testid="stExpanderDetails"] [data-testid="stMarkdownContainer"] {
+    padding-bottom: 0.25rem !important;
+}
+[class*="st-key-aligned_cards_grid"] .insight-body {
+    margin: 0 0 0.2rem 0 !important;
+}
+[class*="st-key-aligned_cards_grid"] .rec-benefit {
+    margin: 0.65rem 0 0.15rem 0 !important;
+    box-sizing: border-box;
+    width: 100%;
+}
+[class*="st-key-ins_critico_"] [data-testid="stExpander"] details {
+    border-left: 4px solid #DC2626 !important;
+}
+[class*="st-key-ins_alto_"] [data-testid="stExpander"] details {
+    border-left: 4px solid #D97706 !important;
+}
+[class*="st-key-ins_medio_"] [data-testid="stExpander"] details {
+    border-left: 4px solid #0284C7 !important;
+}
+[class*="st-key-rec_card_"] [data-testid="stExpander"] details {
+    border-left: 4px solid #0D9488 !important;
+}
+/* Banner ejecutivo superior */
+.exec-banner {
+    background: linear-gradient(135deg, #FFFFFF 0%, #F1F7FC 100%);
+    border: 1px solid #DCE6F2;
+    border-left: 5px solid #0072B2;
+    border-radius: 12px;
+    padding: 1.15rem 1.4rem;
+    margin-bottom: 0.95rem;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+}
+.exec-eyebrow {
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #0072B2;
+    margin-bottom: 0.25rem;
+}
+.exec-title {
+    font-size: 1.65rem;
+    font-weight: 800;
+    color: #0F172A;
+    line-height: 1.2;
+    margin: 0 0 0.35rem 0;
+}
+.exec-subtitle {
+    font-size: 0.92rem;
+    color: #475569;
+    margin: 0 0 0.75rem 0;
+}
+.status-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.26rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background: #FFFFFF;
+    color: #334155;
+    border: 1px solid #CBD5E1;
+    font-variant-numeric: tabular-nums;
+}
+.status-pill--accent {
+    background: #E0F2FE;
+    color: #0369A1;
+    border-color: #BAE6FD;
+}
+.status-pill--ok {
+    background: #DCFCE7;
+    color: #166534;
+    border-color: #BBF7D0;
+}
+/* Navegación de pestañas */
+[data-baseweb="tab-list"] {
+    background-color: #FFFFFF !important;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    padding: 0.3rem 0.45rem;
+    gap: 0.35rem;
+    margin-bottom: 0.6rem;
+}
+[data-baseweb="tab"] {
+    border-radius: 8px !important;
+    padding: 0.45rem 0.9rem !important;
+    font-weight: 600 !important;
+    color: #475569 !important;
+}
+[data-baseweb="tab"] p {
+    padding: 0 !important;
+    margin: 0 !important;
+    font-weight: 600 !important;
+    color: inherit !important;
+}
+[data-baseweb="tab"][aria-selected="true"],
+[data-baseweb="tab"][aria-selected="true"] p {
+    background-color: #EFF6FF !important;
+    color: #0072B2 !important;
+}
+[data-baseweb="tab-highlight"] {
+    background-color: #0072B2 !important;
+    height: 2px !important;
+}
+/* Tarjetas KPI */
+.kpi-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-top: 3px solid var(--kpi-accent, #0072B2);
+    border-radius: 12px;
+    padding: 0.9rem 1rem;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    min-height: 126px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+.kpi-label {
+    font-size: 0.74rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.045em;
+    color: #64748B;
+    margin-bottom: 0.25rem;
+}
+.kpi-value {
+    font-size: 1.55rem;
+    font-weight: 800;
+    color: #0F172A;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 0.45rem;
+}
+.kpi-badge {
+    display: inline-block;
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.2rem 0.55rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+}
+.kpi-badge--positive {
+    background: #DCFCE7;
+    color: #166534;
+    border: 1px solid #BBF7D0;
+}
+.kpi-badge--negative {
+    background: #FEE2E2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+.kpi-badge--info {
+    background: #E0F2FE;
+    color: #0369A1;
+    border: 1px solid #BAE6FD;
+}
+.kpi-badge--neutral {
+    background: #F1F5F9;
+    color: #475569;
+    border: 1px solid #E2E8F0;
+}
+/* Títulos internos de tarjetas */
+.card-hdr {
+    margin: 0.1rem 0 0.55rem 0;
+}
+.card-title {
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: #0F172A;
+    margin: 0;
+}
+.card-sub {
+    font-size: 0.82rem;
+    color: #64748B;
+    margin: 0.15rem 0 0 0;
+}
+/* Leyenda visual del mapa PyDeck */
+.map-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem 1rem;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.65rem;
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    color: #334155;
+}
+.legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+    font-weight: 500;
+}
+.legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    border: 1px solid rgba(15, 23, 42, 0.25);
+}
+.legend-line {
+    width: 18px;
+    height: 3px;
+    border-radius: 2px;
+    display: inline-block;
+    background: #56B4E9;
+}
+/* Tarjetas abiertas de Insights y Recomendaciones */
+.insight-card, .rec-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-left: 4px solid var(--card-accent, #0072B2);
+    border-radius: 10px;
+    padding: 0.95rem 1.05rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.card-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+}
+.card-id-chip {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: #0F172A;
+    background: #F1F5F9;
+    padding: 0.16rem 0.5rem;
+    border-radius: 6px;
+    font-variant-numeric: tabular-nums;
+}
+.card-theme-chip {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: #475569;
+}
+.severity-badge {
+    font-size: 0.74rem;
+    font-weight: 700;
+    padding: 0.16rem 0.55rem;
+    border-radius: 999px;
+}
+.severity-critico { background: #FEE2E2; color: #991B1B; }
+.severity-alto { background: #FEF3C7; color: #92400E; }
+.severity-medio { background: #E0F2FE; color: #075985; }
+.insight-title {
+    font-size: 0.96rem;
+    font-weight: 700;
+    color: #0F172A;
+    margin: 0 0 0.35rem 0;
+}
+.insight-body {
+    font-size: 0.86rem;
+    color: #334155;
+    line-height: 1.48;
+    margin: 0;
+}
+.rec-benefit {
+    margin-top: 0.55rem;
+    padding: 0.45rem 0.65rem;
+    border-radius: 6px;
+    background: #ECFDF5;
+    border: 1px solid #A7F3D0;
+    color: #065F46;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+</style>""",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_kpi_card(
+    label: str,
+    value: str,
+    badge_text: str,
+    tone: str = "neutral",
+    accent: str = "#0072B2",
+) -> None:
+    """Renderiza una tarjeta KPI estilizada con números tabulares y badge semántico."""
+    tone_cls = {
+        "positive": "kpi-badge--positive",
+        "negative": "kpi-badge--negative",
+        "info": "kpi-badge--info",
+        "neutral": "kpi-badge--neutral",
+    }.get(tone, "kpi-badge--neutral")
+    html_card = (
+        f'<div class="kpi-card" style="--kpi-accent: {html.escape(accent)};">'
+        f'<div class="kpi-label">{html.escape(label)}</div>'
+        f'<div class="kpi-value">{html.escape(value)}</div>'
+        f'<span class="kpi-badge {tone_cls}">{html.escape(badge_text)}</span>'
+        f"</div>"
+    )
+    st.markdown(html_card, unsafe_allow_html=True)
+
+
+def _render_executive_banner(
+    bench: dict[str, Any],
+    mongo_backend: str,
+    mod: dict[str, Any],
+) -> None:
+    """Renderiza la cabecera ejecutiva con chips de estado en vivo."""
+    banner_html = (
+        '<div class="exec-banner">'
+        '<div class="exec-eyebrow">Fundación Universitaria Los Libertadores · Proyecto Final Big Data</div>'
+        '<div class="exec-title">🌊 Pronóstico Hidrológico del Río Orinoco (+14 días)</div>'
+        '<div class="exec-subtitle">Pipeline CRISP-DM multi-fuente: Hidrometría INAMEH/UCAB, precipitación satelital NASA POWER e índice macroclimático NOAA ONI.</div>'
+        '<div class="status-pills">'
+        f'<span class="status-pill status-pill--ok">⚡ ETL: {html.escape(str(bench["herramienta_elegida"]))} ({bench["tiempo_etl_completo_seg"]} s)</span>'
+        f'<span class="status-pill">🗄️ NoSQL: {html.escape(mongo_backend)}</span>'
+        f'<span class="status-pill status-pill--accent">🤖 Modelo: {html.escape(str(mod["algoritmo"]))} · MAE {mod["metricas"]["mae_m"]:.4f} m</span>'
+        '<span class="status-pill">🕒 Horizonte: +14 días (Test 2023–2024)</span>'
+        "</div>"
+        "</div>"
+    )
+    st.markdown(banner_html, unsafe_allow_html=True)
+
+
+def _render_card_header(title: str, subtitle: str = "") -> None:
+    """Renderiza un encabezado limpio dentro de una tarjeta modular."""
+    sub_html = f'<p class="card-sub">{html.escape(subtitle)}</p>' if subtitle else ""
+    st.markdown(
+        f'<div class="card-hdr"><p class="card-title">{html.escape(title)}</p>{sub_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _style_altair_chart(
+    chart: alt.Chart | alt.LayerChart,
+    title: str,
+    subtitle: str = "",
+    height: int = 340,
+) -> alt.Chart | alt.LayerChart:
+    """Unifica tipografía, grilla suave y fondo transparente para gráficos Altair."""
+    title_spec: Any = (
+        alt.TitleParams(
+            text=title,
+            subtitle=subtitle,
+            anchor="start",
+            fontSize=15,
+            fontWeight="bold",
+            color="#0F172A",
+            subtitleColor="#64748B",
+            subtitleFontSize=12,
+            offset=10,
+        )
+        if subtitle
+        else alt.TitleParams(
+            text=title,
+            anchor="start",
+            fontSize=15,
+            fontWeight="bold",
+            color="#0F172A",
+            offset=10,
+        )
+    )
+    return (
+        chart.properties(
+            height=height,
+            title=title_spec,
+            padding={"right": 18, "top": 6, "left": 4, "bottom": 4},
+        )
+        .configure(background="transparent")
+        .configure_view(strokeWidth=0)
+        .configure_axis(
+            gridColor="#E2E8F0",
+            gridDash=[3, 3],
+            domainColor="#CBD5E1",
+            tickColor="#CBD5E1",
+            labelColor="#475569",
+            titleColor="#334155",
+            labelFontSize=11,
+            titleFontSize=12,
+            titlePadding=8,
+        )
+        .configure_legend(
+            labelColor="#334155",
+            titleColor="#0F172A",
+            labelFontSize=11,
+            titleFontSize=12,
+        )
+    )
+
+
+def _render_map_legend(include_nasa: bool) -> None:
+    """Muestra la leyenda cromática de estaciones limnimétricas y puntos NASA POWER."""
+    station_items = "".join(
+        f'<span class="legend-item"><span class="legend-dot" style="background:{color};"></span>{html.escape(name)}</span>'
+        for name, color in zip(STATION_COLOR_DOMAIN, STATION_COLOR_RANGE)
+    )
+    nasa_item = (
+        '<span class="legend-item"><span class="legend-dot" style="background:#56B4E9;"></span>Red Lluvia NASA POWER (11 puntos)</span>'
+        if include_nasa
+        else ""
+    )
+    axis_item = '<span class="legend-item"><span class="legend-line"></span>Tránsito aguas abajo (~750 km)</span>'
+    st.markdown(
+        f'<div class="map-legend">{station_items}{nasa_item}{axis_item}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_insight_card(ins: dict[str, Any], expanded: bool = False) -> None:
+    """Renderiza una tarjeta desplegable alineada para un insight almacenado en MongoDB."""
+    impacto = str(ins.get("impacto_negocio", "Medio"))
+    sev_slug = {
+        "Crítico": "critico",
+        "Alto": "alto",
+        "Medio": "medio",
+    }.get(impacto, "medio")
+    badge_txt = _impact_badge(impacto)
+    header_label = f"**{ins['id']}** · {badge_txt} · {ins['titulo']}"
+    with st.container(key=f"ins_{sev_slug}_{ins['id']}"):
+        with st.expander(header_label, expanded=expanded):
+            st.markdown(
+                f'<div style="margin-bottom:0.4rem;"><span class="card-theme-chip">Tema: {html.escape(str(ins["tema"]))}</span></div>'
+                f'<p class="insight-body">{html.escape(str(ins["descripcion"]))}</p>',
+                unsafe_allow_html=True,
+            )
+
+
+def _render_recommendation_card(rec: dict[str, Any], expanded: bool = False) -> None:
+    """Renderiza una tarjeta desplegable alineada para una recomendación de negocio."""
+    header_label = f"**{rec['id']}** · 🎯 {rec['destinatario']}"
+    with st.container(key=f"rec_card_{rec['id']}"):
+        with st.expander(header_label, expanded=expanded):
+            st.markdown(
+                f'<p class="insight-body">{html.escape(str(rec["recomendacion"]))}</p>'
+                f'<div class="rec-benefit">Beneficio esperado: {html.escape(str(rec["beneficio_esperado"]))}</div>',
+                unsafe_allow_html=True,
+            )
+
+
 def main() -> None:
+    _inject_dashboard_css()
     df, olap1, olap2, preds_test = load_parquet_data()
     artifact = load_trained_artifact()
     mongo_doc, mongo_backend = load_analysis_from_mongodb()
@@ -290,11 +1010,7 @@ def main() -> None:
     cal = mongo_doc["calidad_datos"]
     mod = mongo_doc["modelo"]
 
-    st.title("🌊 Pronóstico Hidrológico del Río Orinoco (+14 días)")
-    st.caption(
-        f"**Big Data (Los Libertadores)** · ETL: `{bench['herramienta_elegida']}` ({bench['tiempo_etl_completo_seg']} s) · "
-        f"NoSQL: `{mongo_backend}` · Modelo Ganador: `{mod['algoritmo']}` (MAE `{mod['metricas']['mae_m']:.4f} m`)"
-    )
+    _render_executive_banner(bench, mongo_backend, mod)
 
     tabs = st.tabs([
         "1. 📊 Resumen",
@@ -305,247 +1021,286 @@ def main() -> None:
     ])
 
     # =========================================================================
-    # PESTAÑA 1: RESUMEN EJECUTIVO (KPIs + 2 GRÁFICOS PRINCIPALES)
+    # PESTAÑA 1: RESUMEN EJECUTIVO (KPIs + 2 GRÁFICOS PRINCIPALES + MAPA)
     # =========================================================================
     with tabs[0]:
         k1, k2, k3, k4, k5 = st.columns([0.95, 0.95, 1.05, 0.95, 1.1])
-        k1.metric(
-            "Registros Crudos",
-            f"{ds_meta['registros_crudos_integrados']:,}",
-            "Orinoco + NASA + NOAA",
-        )
-        k2.metric(
-            "Dataset Limpio",
-            f"{ds_meta['registros']:,}",
-            f"2009–2024 · {cal['nulos_despues']} nulos",
-        )
-        k3.metric(
-            "Eficiencia ETL",
-            f"{bench['tiempo_etl_completo_seg']} s",
-            f"-{bench['reduccion_ram_pct']}% RAM ({bench['peso_parquet_procesado_mb']} MB)",
-            delta_color="inverse",
-        )
-        k4.metric(
-            "Modelo Ganador",
-            "XGBoost" if "XGBoost" in artifact["summary"]["modelo_ganador"] else artifact["summary"]["modelo_ganador"],
-            f"R² = {mod['metricas']['r2']:.4f}",
-        )
-        k5.metric(
-            "MAE (+14 días)",
-            f"{mod['metricas']['mae_m']:.4f} m",
-            f"-{mod['metricas']['mejora_vs_baseline_pct']:.2f}% vs. Naive ({mod['linea_base']['mae_m']:.4f} m)",
-            delta_color="inverse",
-        )
-
-        st.divider()
-
-        ctrl1, ctrl2, _ = st.columns([1.15, 0.9, 1.4])
-        with ctrl1:
-            res_metric = st.radio(
-                "Escala del río",
-                options=["nivel_minmax_pct", "y"],
-                format_func=lambda m: "Capacidad Relativa (%)" if m == "nivel_minmax_pct" else "Nivel Absoluto (m s.n.m.)",
-                horizontal=True,
-                key="res_metric",
+        with k1:
+            _render_kpi_card(
+                "Registros Crudos",
+                f"{ds_meta['registros_crudos_integrados']:,}",
+                "Orinoco + NASA + NOAA",
+                tone="neutral",
+                accent="#64748B",
             )
-        with ctrl2:
-            res_window = st.radio(
-                "Ventana",
-                options=["2020–2024", "2009–2024"],
-                horizontal=True,
-                key="res_window",
+        with k2:
+            _render_kpi_card(
+                "Dataset Limpio",
+                f"{ds_meta['registros']:,}",
+                f"2009–2024 · {cal['nulos_despues']} nulos",
+                tone="neutral",
+                accent="#0072B2",
             )
+        with k3:
+            _render_kpi_card(
+                "Eficiencia ETL",
+                f"{bench['tiempo_etl_completo_seg']} s",
+                f"▼ -{bench['reduccion_ram_pct']}% RAM · {bench['peso_parquet_procesado_mb']} MB",
+                tone="positive",
+                accent="#009E73",
+            )
+        with k4:
+            winner_short = (
+                "XGBoost"
+                if "XGBoost" in artifact["summary"]["modelo_ganador"]
+                else artifact["summary"]["modelo_ganador"]
+            )
+            _render_kpi_card(
+                "Modelo Ganador",
+                winner_short,
+                f"R² = {mod['metricas']['r2']:.4f} · Test 23–24",
+                tone="info",
+                accent="#0284C7",
+            )
+        with k5:
+            _render_kpi_card(
+                "MAE (+14 días)",
+                f"{mod['metricas']['mae_m']:.4f} m",
+                f"▼ -{mod['metricas']['mejora_vs_baseline_pct']:.2f}% vs. Naive ({mod['linea_base']['mae_m']:.4f} m)",
+                tone="positive",
+                accent="#D55E00",
+            )
+
+        st.markdown("<div style='height:0.65rem'></div>", unsafe_allow_html=True)
+
+        with st.container(border=True):
+            ctrl1, ctrl2, _ = st.columns([1.2, 0.9, 1.3])
+            with ctrl1:
+                res_metric = st.radio(
+                    "Escala del río",
+                    options=["nivel_minmax_pct", "y"],
+                    format_func=lambda m: "Capacidad Relativa (%)" if m == "nivel_minmax_pct" else "Nivel Absoluto (m s.n.m.)",
+                    horizontal=True,
+                    key="res_metric",
+                )
+            with ctrl2:
+                res_window = st.radio(
+                    "Ventana temporal",
+                    options=["2020–2024", "2009–2024"],
+                    horizontal=True,
+                    key="res_window",
+                )
 
         g_left, g_right = st.columns([1.45, 1.0])
         with g_left:
-            min_year_res = 2020 if res_window == "2020–2024" else 2009
-            df_res = df[df["anio"] >= min_year_res][["ds", "estacion_nombre", res_metric]].copy()
-            # Remuestreo semanal para renderizado fluido y trazos limpios
-            df_res = (
-                df_res.set_index("ds")
-                .groupby("estacion_nombre", observed=True)[res_metric]
-                .resample("W")
-                .mean()
-                .reset_index()
-            )
-            y_title = "Capacidad Relativa (%)" if res_metric == "nivel_minmax_pct" else "Nivel (m s.n.m.)"
-            chart_river = (
-                alt.Chart(df_res)
-                .mark_line(strokeWidth=2)
-                .encode(
-                    x=alt.X(
-                        "ds:T",
-                        title="Fecha (Año-Mes)",
-                        axis=alt.Axis(format="%Y-%m", labelAngle=0, tickCount=8),
-                    ),
-                    y=alt.Y(f"{res_metric}:Q", title=y_title),
-                    color=alt.Color(
-                        "estacion_nombre:N",
-                        title="Estación",
-                        legend=alt.Legend(orient="bottom"),
-                        scale=alt.Scale(domain=STATION_COLOR_DOMAIN, range=STATION_COLOR_RANGE),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("ds:T", title="Fecha", format="%Y-%m-%d"),
-                        alt.Tooltip("estacion_nombre:N", title="Estación"),
-                        alt.Tooltip(f"{res_metric}:Q", title=y_title, format=".2f"),
-                    ],
+            with st.container(border=True):
+                min_year_res = 2020 if res_window == "2020–2024" else 2009
+                df_res = df[df["anio"] >= min_year_res][["ds", "estacion_nombre", res_metric]].copy()
+                # Remuestreo semanal para renderizado fluido y trazos limpios
+                df_res = (
+                    df_res.set_index("ds")
+                    .groupby("estacion_nombre", observed=True)[res_metric]
+                    .resample("W")
+                    .mean()
+                    .reset_index()
                 )
-                .properties(height=360, title=f"Dinámica en Cascada del Río Orinoco — {y_title}")
-                .interactive()
-            )
-            st.altair_chart(chart_river, width="stretch")
+                y_title = "Capacidad Relativa (%)" if res_metric == "nivel_minmax_pct" else "Nivel (m s.n.m.)"
+                chart_river = (
+                    alt.Chart(df_res)
+                    .mark_line(strokeWidth=2)
+                    .encode(
+                        x=alt.X(
+                            "ds:T",
+                            title="Fecha (Año-Mes)",
+                            axis=alt.Axis(format="%Y-%m", labelAngle=0, tickCount=8),
+                        ),
+                        y=alt.Y(f"{res_metric}:Q", title=y_title),
+                        color=alt.Color(
+                            "estacion_nombre:N",
+                            title="Estación",
+                            legend=alt.Legend(orient="bottom", columns=2, columnPadding=18, labelLimit=180),
+                            scale=alt.Scale(domain=STATION_COLOR_DOMAIN, range=STATION_COLOR_RANGE),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("ds:T", title="Fecha", format="%Y-%m-%d"),
+                            alt.Tooltip("estacion_nombre:N", title="Estación"),
+                            alt.Tooltip(f"{res_metric}:Q", title=y_title, format=".2f"),
+                        ],
+                    )
+                    .interactive()
+                )
+                chart_river = _style_altair_chart(
+                    chart_river,
+                    title=f"Dinámica en Cascada del Río Orinoco — {y_title}",
+                    subtitle=f"Promedio semanal por estación ({res_window}) · Arrastra o haz zoom para explorar",
+                    height=355,
+                )
+                st.altair_chart(chart_river, width="stretch")
 
         with g_right:
-            comp_df = pd.DataFrame(mod["comparacion_modelos"])
-            comp_df["etiqueta"] = comp_df.apply(
-                lambda r: f"{r['mae_m']:.4f} m (-{r['mejora_vs_baseline_pct']:.1f}%)"
-                if r["mejora_vs_baseline_pct"] > 0
-                else f"{r['mae_m']:.4f} m (Base)",
-                axis=1,
-            )
-            max_mae = float(comp_df["mae_m"].max()) * 1.55
-            bars_mae = (
-                alt.Chart(comp_df)
-                .mark_bar(cornerRadiusEnd=6)
-                .encode(
-                    x=alt.X(
-                        "mae_m:Q",
-                        title="Error Medio Absoluto MAE (m) — Menor es mejor",
-                        scale=alt.Scale(domain=[0, max_mae]),
-                    ),
-                    y=alt.Y("modelo:N", sort="x", title="", axis=alt.Axis(labelLimit=160)),
-                    color=alt.Color(
-                        "modelo:N",
-                        legend=None,
-                        scale=alt.Scale(domain=MODEL_COLOR_DOMAIN, range=MODEL_COLOR_RANGE),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("modelo:N", title="Modelo"),
-                        alt.Tooltip("mae_m:Q", title="MAE (m)", format=".4f"),
-                        alt.Tooltip("rmse_m:Q", title="RMSE (m)", format=".4f"),
-                        alt.Tooltip("r2:Q", title="R²", format=".4f"),
-                        alt.Tooltip("mejora_vs_baseline_pct:Q", title="Mejora vs Naive (%)", format=".2f"),
-                    ],
+            with st.container(border=True):
+                comp_df = pd.DataFrame(mod["comparacion_modelos"])
+                comp_df["etiqueta"] = comp_df.apply(
+                    lambda r: f"{r['mae_m']:.4f} m (-{r['mejora_vs_baseline_pct']:.1f}%)"
+                    if r["mejora_vs_baseline_pct"] > 0
+                    else f"{r['mae_m']:.4f} m (Base)",
+                    axis=1,
                 )
-            )
-            text_mae = (
-                alt.Chart(comp_df)
-                .mark_text(align="left", baseline="middle", dx=6, fontWeight="bold")
-                .encode(
-                    x="mae_m:Q",
-                    y=alt.Y("modelo:N", sort="x"),
-                    text="etiqueta:N",
-                    color=alt.Color(
-                        "modelo:N",
-                        legend=None,
-                        scale=alt.Scale(domain=MODEL_COLOR_DOMAIN, range=MODEL_COLOR_RANGE),
-                    ),
+                max_mae = float(comp_df["mae_m"].max()) * 1.55
+                bars_mae = (
+                    alt.Chart(comp_df)
+                    .mark_bar(cornerRadiusEnd=6)
+                    .encode(
+                        x=alt.X(
+                            "mae_m:Q",
+                            title="MAE (m) — Menor es mejor",
+                            scale=alt.Scale(domain=[0, max_mae]),
+                        ),
+                        y=alt.Y("modelo:N", sort="x", title="", axis=alt.Axis(labelLimit=160)),
+                        color=alt.Color(
+                            "modelo:N",
+                            legend=None,
+                            scale=alt.Scale(domain=MODEL_COLOR_DOMAIN, range=MODEL_COLOR_RANGE),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("modelo:N", title="Modelo"),
+                            alt.Tooltip("mae_m:Q", title="MAE (m)", format=".4f"),
+                            alt.Tooltip("rmse_m:Q", title="RMSE (m)", format=".4f"),
+                            alt.Tooltip("r2:Q", title="R²", format=".4f"),
+                            alt.Tooltip("mejora_vs_baseline_pct:Q", title="Mejora vs Naive (%)", format=".2f"),
+                        ],
+                    )
                 )
-            )
-            chart_mae = (
-                (bars_mae + text_mae)
-                .properties(height=360, title="Error MAE a +14 Días (m) — Test 2023–2024")
-                .configure_view(strokeWidth=0)
-            )
-            st.altair_chart(chart_mae, width="stretch")
+                text_mae = (
+                    alt.Chart(comp_df)
+                    .mark_text(align="left", baseline="middle", dx=6, fontWeight="bold")
+                    .encode(
+                        x="mae_m:Q",
+                        y=alt.Y("modelo:N", sort="x"),
+                        text="etiqueta:N",
+                        color=alt.Color(
+                            "modelo:N",
+                            legend=None,
+                            scale=alt.Scale(domain=MODEL_COLOR_DOMAIN, range=MODEL_COLOR_RANGE),
+                        ),
+                    )
+                )
+                chart_mae = _style_altair_chart(
+                    bars_mae + text_mae,
+                    title="Error MAE a +14 Días (m) — Test 2023–2024",
+                    subtitle="Comparación contra la línea base de persistencia Naive",
+                    height=355,
+                )
+                st.altair_chart(chart_mae, width="stretch")
 
-        st.divider()
-        m_hdr1, m_hdr2 = st.columns([1.8, 1.0])
-        with m_hdr1:
-            st.markdown("##### 🗺️ Mapa de Estaciones del Río Orinoco y Red Pluviométrica NASA POWER")
-        with m_hdr2:
-            show_nasa_pts = st.checkbox(
-                "Mostrar 11 puntos satelitales NASA POWER",
-                value=True,
-                key="show_nasa_map",
-            )
+        with st.container(border=True):
+            m_hdr1, m_hdr2 = st.columns([1.8, 1.0])
+            with m_hdr1:
+                _render_card_header(
+                    "🗺️ Mapa de Estaciones del Río Orinoco y Red Pluviométrica NASA POWER",
+                    "Ubicación geográfica de las 4 estaciones limnimétricas y puntos satelitales de lluvia de la cuenca",
+                )
+            with m_hdr2:
+                show_nasa_pts = st.checkbox(
+                    "Mostrar 11 puntos satelitales NASA POWER",
+                    value=True,
+                    key="show_nasa_map",
+                )
 
-        map_all_df, map_river_df = _build_map_dataframe(mongo_doc, show_nasa_pts)
-        cascade_path = pd.DataFrame([{
-            "path": [[r["lon"], r["lat"]] for _, r in map_river_df.iterrows()],
-            "nombre": "Tránsito Hidráulico en Cascada: Puerto Ayacucho → Caicara → Ciudad Bolívar → Palúa",
-            "tipo": "Eje Fluvial del Río Orinoco",
-            "tramo": "Sentido de propagación de la onda de crecida",
-            "coordenadas": "Recorrido ~750 km",
-            "nivel_medio_txt": "Tiempo de tránsito: 7 a 14 días",
-            "mae_txt": "Correlación Caicara(t-7) -> C. Bolívar(t+14): r = 0.944",
-        }])
+            _render_map_legend(show_nasa_pts)
 
-        layers = [
-            pdk.Layer(
-                "PathLayer",
-                data=cascade_path,
-                get_path="path",
-                get_color=[86, 180, 233, 200],
-                width_scale=20,
-                width_min_pixels=4,
-                pickable=True,
-            ),
-            pdk.Layer(
-                "ScatterplotLayer",
-                data=map_all_df,
-                get_position="[lon, lat]",
-                get_fill_color="color",
-                get_line_color=[255, 255, 255, 230],
-                line_width_min_pixels=2,
-                get_radius="radius",
-                pickable=True,
-                stroked=True,
-                filled=True,
-            ),
-            pdk.Layer(
-                "TextLayer",
-                data=map_river_df,
-                get_position="[lon, lat]",
-                get_text="nombre",
-                get_color=[250, 250, 250, 255],
-                get_size=14,
-                characterSet="auto",
-                get_alignment_baseline="'bottom'",
-                get_pixel_offset=[0, -16],
-            ),
-        ]
+            map_all_df, map_river_df = _build_map_dataframe(mongo_doc, show_nasa_pts)
+            cascade_path = pd.DataFrame([{
+                "path": [[r["lon"], r["lat"]] for _, r in map_river_df.iterrows()],
+                "nombre": "Tránsito Hidráulico en Cascada: Puerto Ayacucho → Caicara → Ciudad Bolívar → Palúa",
+                "tipo": "Eje Fluvial del Río Orinoco",
+                "tramo": "Sentido de propagación de la onda de crecida",
+                "coordenadas": "Recorrido ~750 km",
+                "nivel_medio_txt": "Tiempo de tránsito: 7 a 14 días",
+                "mae_txt": "Correlación Caicara(t-7) -> C. Bolívar(t+14): r = 0.944",
+            }])
 
-        deck = pdk.Deck(
-            layers=layers,
-            initial_view_state=pdk.ViewState(
-                latitude=6.4,
-                longitude=-66.5,
-                zoom=5.4,
-                pitch=0,
-            ),
-            tooltip={
-                "html": (
-                    "<b>{nombre}</b><br/>"
-                    "<span>{tipo}</span><br/>"
-                    "<span>{tramo} ({coordenadas})</span><br/>"
-                    "<span>Nivel medio: {nivel_medio_txt}</span><br/>"
-                    "<span>{mae_txt}</span>"
+            layers = [
+                pdk.Layer(
+                    "PathLayer",
+                    data=cascade_path,
+                    get_path="path",
+                    get_color=[86, 180, 233, 210],
+                    width_scale=20,
+                    width_min_pixels=4,
+                    pickable=True,
                 ),
-                "style": {
-                    "backgroundColor": "#0E1117",
-                    "color": "#FAFAFA",
-                    "fontSize": "12px",
-                    "padding": "8px",
-                    "borderRadius": "6px",
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=map_all_df,
+                    get_position="[lon, lat]",
+                    get_fill_color="color",
+                    get_line_color=[255, 255, 255, 240],
+                    line_width_min_pixels=2,
+                    get_radius="radius",
+                    pickable=True,
+                    stroked=True,
+                    filled=True,
+                ),
+                pdk.Layer(
+                    "TextLayer",
+                    data=map_river_df,
+                    get_position="[lon, lat]",
+                    get_text="nombre",
+                    get_color=[15, 23, 42, 250],
+                    get_size=13,
+                    characterSet="'auto'",
+                    font_weight=700,
+                    get_alignment_baseline="'center'",
+                    get_pixel_offset="label_offset",
+                    background=True,
+                    get_background_color=[255, 255, 255, 235],
+                    background_padding=[6, 3],
+                ),
+            ]
+
+            deck = pdk.Deck(
+                layers=layers,
+                map_style="light",
+                initial_view_state=pdk.ViewState(
+                    latitude=6.4,
+                    longitude=-66.5,
+                    zoom=5.4,
+                    pitch=0,
+                ),
+                tooltip={
+                    "html": (
+                        "<b>{nombre}</b><br/>"
+                        "<span>{tipo}</span><br/>"
+                        "<span>{tramo} ({coordenadas})</span><br/>"
+                        "<span>Nivel medio: {nivel_medio_txt}</span><br/>"
+                        "<span>{mae_txt}</span>"
+                    ),
+                    "style": {
+                        "backgroundColor": "#FFFFFF",
+                        "color": "#0F172A",
+                        "border": "1px solid #CBD5E1",
+                        "boxShadow": "0 4px 12px rgba(15, 23, 42, 0.12)",
+                        "fontSize": "12px",
+                        "padding": "10px",
+                        "borderRadius": "8px",
+                    },
                 },
-            },
-        )
+            )
 
-        st.pydeck_chart(deck, width="stretch", height=400)
+            st.pydeck_chart(deck, width="stretch", height=400)
 
-        st_summary_tbl = map_river_df[
-            ["nombre", "tramo", "coordenadas", "nivel_medio_txt", "nivel_max_txt", "rol"]
-        ].rename(columns={
-            "nombre": "Estación (Orden Aguas Abajo)",
-            "tramo": "Tramo",
-            "coordenadas": "Lat / Lon",
-            "nivel_medio_txt": "Nivel Medio",
-            "nivel_max_txt": "Máximo Histórico",
-            "rol": "Rol en el Modelo (+14d)",
-        })
-        st.table(st_summary_tbl, border="horizontal", width="stretch", hide_index=True)
+            st_summary_tbl = map_river_df[
+                ["nombre", "tramo", "coordenadas", "nivel_medio_txt", "nivel_max_txt", "rol"]
+            ].rename(columns={
+                "nombre": "Estación (Orden Aguas Abajo)",
+                "tramo": "Tramo",
+                "coordenadas": "Lat / Lon",
+                "nivel_medio_txt": "Nivel Medio",
+                "nivel_max_txt": "Máximo Histórico",
+                "rol": "Rol en el Modelo (+14d)",
+            })
+            st.table(st_summary_tbl, border="horizontal", width="stretch", hide_index=True)
 
         with st.expander("ℹ️ Ver síntesis metodológica CRISP-DM y auditoría de calidad ETL (Antes vs. Después)", expanded=False):
             st.markdown(
@@ -568,28 +1323,64 @@ def main() -> None:
     # PESTAÑA 2: DATOS Y CUBOS OLAP (GRÁFICOS OLAP ARRIBA + TABLAS COMPACTAS)
     # =========================================================================
     with tabs[1]:
-        f1, f2, f3, f4 = st.columns(4)
-        with f1:
-            sel_stations = st.multiselect(
-                "Estaciones",
-                options=STATION_COLOR_DOMAIN,
-                default=STATION_COLOR_DOMAIN,
+        with st.container(border=True):
+            _render_card_header(
+                "🎛️ Filtros Multidimensionales OLAP",
+                "Filtra simultáneamente los cubos agregados y la muestra del dataset limpio",
             )
-        with f2:
-            min_yr, max_yr = int(df["anio"].min()), int(df["anio"].max())
-            sel_years = st.slider("Años", min_yr, max_yr, (2015, 2024))
-        with f3:
-            sel_epocas = st.multiselect(
-                "Época Hidrológica",
-                options=EPOCA_OPTIONS,
-                default=EPOCA_OPTIONS,
-            )
-        with f4:
-            sel_enso = st.multiselect(
-                "Fase ENSO",
-                options=ENSO_OPTIONS,
-                default=ENSO_OPTIONS,
-            )
+            f_top1, f_top2 = st.columns([1.5, 1.0])
+            with f_top1:
+                if hasattr(st, "pills"):
+                    sel_stations = st.pills(
+                        "Estaciones",
+                        options=STATION_COLOR_DOMAIN,
+                        default=STATION_COLOR_DOMAIN,
+                        selection_mode="multi",
+                        wrap=True,
+                        key="olap_stations",
+                    )
+                else:
+                    sel_stations = st.multiselect(
+                        "Estaciones",
+                        options=STATION_COLOR_DOMAIN,
+                        default=STATION_COLOR_DOMAIN,
+                    )
+            with f_top2:
+                min_yr, max_yr = int(df["anio"].min()), int(df["anio"].max())
+                sel_years = st.slider("Años", min_yr, max_yr, (2015, 2024))
+            f_bot1, f_bot2 = st.columns([1.4, 1.0])
+            with f_bot1:
+                if hasattr(st, "pills"):
+                    sel_epocas = st.pills(
+                        "Época Hidrológica",
+                        options=EPOCA_OPTIONS,
+                        default=EPOCA_OPTIONS,
+                        selection_mode="multi",
+                        wrap=True,
+                        key="olap_epocas",
+                    )
+                else:
+                    sel_epocas = st.multiselect(
+                        "Época Hidrológica",
+                        options=EPOCA_OPTIONS,
+                        default=EPOCA_OPTIONS,
+                    )
+            with f_bot2:
+                if hasattr(st, "pills"):
+                    sel_enso = st.pills(
+                        "Fase ENSO",
+                        options=ENSO_OPTIONS,
+                        default=ENSO_OPTIONS,
+                        selection_mode="multi",
+                        wrap=True,
+                        key="olap_enso",
+                    )
+                else:
+                    sel_enso = st.multiselect(
+                        "Fase ENSO",
+                        options=ENSO_OPTIONS,
+                        default=ENSO_OPTIONS,
+                    )
 
         sub_olap1 = olap1[
             (olap1["estacion_nombre"].isin(sel_stations))
@@ -604,99 +1395,115 @@ def main() -> None:
             & (olap2["epoca_hidrologica"].isin(sel_epocas))
         ].copy()
 
-        oc_ctrl1, oc_ctrl2 = st.columns(2)
-        with oc_ctrl1:
-            hm_station = st.selectbox(
-                "Estación para Heatmap OLAP 1 (Año × Época)",
-                options=sel_stations if sel_stations else STATION_COLOR_DOMAIN,
-                index=min(2, max(len(sel_stations) - 1, 0)),
-                key="hm_station",
-            )
-        with oc_ctrl2:
-            olap2_metric = st.selectbox(
-                "Métrica para Cubo OLAP 2 (Estación × ENSO)",
-                options=["capacidad_relativa_pct", "nivel_medio_m", "lluvia_media_diaria_mm"],
-                format_func=lambda m: {
+        oc1, oc2 = st.columns(2)
+        with oc1:
+            with st.container(border=True):
+                hm_station = st.selectbox(
+                    "Estación para Heatmap OLAP 1 (Año × Época)",
+                    options=sel_stations if sel_stations else STATION_COLOR_DOMAIN,
+                    index=min(2, max(len(sel_stations) - 1, 0)),
+                    key="hm_station",
+                )
+                st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+                hm_df = sub_olap1[sub_olap1["estacion_nombre"] == hm_station].copy()
+                heatmap = (
+                    alt.Chart(hm_df)
+                    .mark_rect(cornerRadius=4)
+                    .encode(
+                        x=alt.X("anio:O", title="Año", axis=alt.Axis(labelAngle=0)),
+                        y=alt.Y(
+                            "epoca_hidrologica:N",
+                            title="Época Hidrológica",
+                            sort=EPOCA_OPTIONS,
+                            axis=alt.Axis(labelLimit=180),
+                        ),
+                        color=alt.Color(
+                            "nivel_medio_m:Q",
+                            title="Nivel (m s.n.m.)",
+                            scale=alt.Scale(scheme="blues"),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("anio:O", title="Año"),
+                            alt.Tooltip("epoca_hidrologica:N", title="Época"),
+                            alt.Tooltip("nivel_medio_m:Q", title="Nivel Medio (m s.n.m.)", format=".2f"),
+                            alt.Tooltip("nivel_max_m:Q", title="Máximo (m s.n.m.)", format=".2f"),
+                            alt.Tooltip("lluvia_acum_mm:Q", title="Lluvia Acumulada (mm)", format=".0f"),
+                        ],
+                    )
+                )
+                heatmap = _style_altair_chart(
+                    heatmap,
+                    title=f"Cubo OLAP 1: Nivel Medio en {hm_station}",
+                    subtitle="Cruce matricial Año × Época Hidrológica (m s.n.m.)",
+                    height=320,
+                )
+                st.altair_chart(heatmap, width="stretch")
+
+        with oc2:
+            with st.container(border=True):
+                olap2_metric = st.selectbox(
+                    "Métrica para Cubo OLAP 2 (Estación × ENSO)",
+                    options=["capacidad_relativa_pct", "nivel_medio_m", "lluvia_media_diaria_mm"],
+                    format_func=lambda m: {
+                        "capacidad_relativa_pct": "Capacidad Relativa Media (%)",
+                        "nivel_medio_m": "Nivel Medio (m s.n.m.)",
+                        "lluvia_media_diaria_mm": "Lluvia Media Diaria (mm)",
+                    }[m],
+                    key="olap2_metric",
+                )
+                st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+                enso_agg = (
+                    sub_olap2.groupby(["estacion_nombre", "fase_enso"], as_index=False, observed=True)
+                    .agg(
+                        capacidad_relativa_pct=("capacidad_relativa_pct", "mean"),
+                        nivel_medio_m=("nivel_medio_m", "mean"),
+                        lluvia_media_diaria_mm=("lluvia_media_diaria_mm", "mean"),
+                    )
+                )
+                olap2_label = {
                     "capacidad_relativa_pct": "Capacidad Relativa Media (%)",
                     "nivel_medio_m": "Nivel Medio (m s.n.m.)",
                     "lluvia_media_diaria_mm": "Lluvia Media Diaria (mm)",
-                }[m],
-                key="olap2_metric",
-            )
-
-        oc1, oc2 = st.columns(2)
-        with oc1:
-            hm_df = sub_olap1[sub_olap1["estacion_nombre"] == hm_station].copy()
-            heatmap = (
-                alt.Chart(hm_df)
-                .mark_rect(cornerRadius=3)
-                .encode(
-                    x=alt.X("anio:O", title="Año", axis=alt.Axis(labelAngle=0)),
-                    y=alt.Y(
-                        "epoca_hidrologica:N",
-                        title="Época Hidrológica",
-                        sort=EPOCA_OPTIONS,
-                        axis=alt.Axis(labelLimit=180),
-                    ),
-                    color=alt.Color(
-                        "nivel_medio_m:Q",
-                        title="Nivel (m s.n.m.)",
-                        scale=alt.Scale(scheme="blues"),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("anio:O", title="Año"),
-                        alt.Tooltip("epoca_hidrologica:N", title="Época"),
-                        alt.Tooltip("nivel_medio_m:Q", title="Nivel Medio (m s.n.m.)", format=".2f"),
-                        alt.Tooltip("nivel_max_m:Q", title="Máximo (m s.n.m.)", format=".2f"),
-                        alt.Tooltip("lluvia_acum_mm:Q", title="Lluvia Acumulada (mm)", format=".0f"),
-                    ],
+                }[olap2_metric]
+                olap2_short = {
+                    "capacidad_relativa_pct": "Capacidad (%)",
+                    "nivel_medio_m": "Nivel Medio (m)",
+                    "lluvia_media_diaria_mm": "Lluvia Media (mm)",
+                }[olap2_metric]
+                enso_bars = (
+                    alt.Chart(enso_agg)
+                    .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                    .encode(
+                        x=alt.X(
+                            "estacion_nombre:N",
+                            title="Estación",
+                            sort=STATION_COLOR_DOMAIN,
+                            axis=alt.Axis(labelAngle=-12, labelOverlap=False, labelLimit=140),
+                        ),
+                        xOffset="fase_enso:N",
+                        y=alt.Y(f"{olap2_metric}:Q", title=olap2_label),
+                        color=alt.Color(
+                            "fase_enso:N",
+                            title="Fase ENSO",
+                            legend=alt.Legend(orient="bottom"),
+                            scale=alt.Scale(domain=ENSO_COLOR_DOMAIN, range=ENSO_COLOR_RANGE),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("estacion_nombre:N", title="Estación"),
+                            alt.Tooltip("fase_enso:N", title="Fase ENSO"),
+                            alt.Tooltip("capacidad_relativa_pct:Q", title="Capacidad (%)", format=".1f"),
+                            alt.Tooltip("nivel_medio_m:Q", title="Nivel Medio (m)", format=".2f"),
+                            alt.Tooltip("lluvia_media_diaria_mm:Q", title="Lluvia diaria (mm)", format=".2f"),
+                        ],
+                    )
                 )
-                .properties(height=340, title=f"Cubo OLAP 1: Nivel Medio en {hm_station} (m s.n.m.)")
-            )
-            st.altair_chart(heatmap, width="stretch")
-
-        with oc2:
-            enso_agg = (
-                sub_olap2.groupby(["estacion_nombre", "fase_enso"], as_index=False, observed=True)
-                .agg(
-                    capacidad_relativa_pct=("capacidad_relativa_pct", "mean"),
-                    nivel_medio_m=("nivel_medio_m", "mean"),
-                    lluvia_media_diaria_mm=("lluvia_media_diaria_mm", "mean"),
+                enso_bars = _style_altair_chart(
+                    enso_bars,
+                    title=f"Cubo OLAP 2: {olap2_short} × Fase ENSO",
+                    subtitle="Comparativa entre La Niña (Frío), Neutro y El Niño (Cálido)",
+                    height=320,
                 )
-            )
-            olap2_label = {
-                "capacidad_relativa_pct": "Capacidad Relativa Media (%)",
-                "nivel_medio_m": "Nivel Medio (m s.n.m.)",
-                "lluvia_media_diaria_mm": "Lluvia Media Diaria (mm)",
-            }[olap2_metric]
-            enso_bars = (
-                alt.Chart(enso_agg)
-                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-                .encode(
-                    x=alt.X(
-                        "estacion_nombre:N",
-                        title="Estación",
-                        sort=STATION_COLOR_DOMAIN,
-                        axis=alt.Axis(labelAngle=0, labelLimit=140),
-                    ),
-                    xOffset="fase_enso:N",
-                    y=alt.Y(f"{olap2_metric}:Q", title=olap2_label),
-                    color=alt.Color(
-                        "fase_enso:N",
-                        title="Fase ENSO",
-                        scale=alt.Scale(domain=ENSO_COLOR_DOMAIN, range=ENSO_COLOR_RANGE),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("estacion_nombre:N", title="Estación"),
-                        alt.Tooltip("fase_enso:N", title="Fase ENSO"),
-                        alt.Tooltip("capacidad_relativa_pct:Q", title="Capacidad (%)", format=".1f"),
-                        alt.Tooltip("nivel_medio_m:Q", title="Nivel Medio (m)", format=".2f"),
-                        alt.Tooltip("lluvia_media_diaria_mm:Q", title="Lluvia diaria (mm)", format=".2f"),
-                    ],
-                )
-                .properties(height=340, title=f"Cubo OLAP 2: {olap2_label} por Fase ENSO")
-            )
-            st.altair_chart(enso_bars, width="stretch")
+                st.altair_chart(enso_bars, width="stretch")
 
         filtered_df = df[
             (df["estacion_nombre"].isin(sel_stations))
@@ -706,333 +1513,367 @@ def main() -> None:
             & (df["fase_enso"].isin(sel_enso))
         ].sort_values(["ds", "unique_id"], ascending=[False, True])
 
-        t_olap1, t_olap2, t_raw = st.tabs([
-            "📋 Cubo OLAP 1 (Año × Época)",
-            "📋 Cubo OLAP 2 (ENSO × Trimestre)",
-            f"🔍 Dataset Limpio ({len(filtered_df):,} filas filtradas)",
-        ])
-        with t_olap1:
-            olap1_view = sub_olap1[
-                [
-                    "anio", "estacion_nombre", "region_tramo", "epoca_hidrologica",
-                    "registros", "nivel_medio_m", "nivel_max_m", "nivel_min_m",
-                    "lluvia_acum_mm", "oni_medio",
-                ]
-            ].sort_values(["anio", "estacion_nombre", "epoca_hidrologica"], ascending=[False, True, True])
-            st.dataframe(
-                olap1_view,
-                width="stretch",
-                hide_index=True,
-                height=300,
-                column_config={
-                    "anio": st.column_config.NumberColumn("Año", format="%d", width="small"),
-                    "estacion_nombre": st.column_config.TextColumn("Estación", width="medium"),
-                    "region_tramo": st.column_config.TextColumn("Tramo", width="medium"),
-                    "epoca_hidrologica": st.column_config.TextColumn("Época Hidrológica", width="medium"),
-                    "registros": st.column_config.NumberColumn("Días", format="%d", width="small"),
-                    "nivel_medio_m": st.column_config.NumberColumn("Nivel Medio", format="%.2f m"),
-                    "nivel_max_m": st.column_config.NumberColumn("Máximo", format="%.2f m"),
-                    "nivel_min_m": st.column_config.NumberColumn("Mínimo", format="%.2f m"),
-                    "lluvia_acum_mm": st.column_config.NumberColumn("Lluvia Acum.", format="%.0f mm"),
-                    "oni_medio": st.column_config.NumberColumn("ONI Medio", format="%.2f °C"),
-                },
+        with st.container(border=True):
+            _render_card_header(
+                "📑 Tablas Detalladas de Cubos OLAP y Registros Limpios",
+                f"Mostrando resultados filtrados para {len(sel_stations)} estación(es) entre {sel_years[0]} y {sel_years[1]}",
             )
+            t_olap1, t_olap2, t_raw = st.tabs([
+                "📋 Cubo OLAP 1 (Año × Época)",
+                "📋 Cubo OLAP 2 (ENSO × Trimestre)",
+                f"🔍 Dataset Limpio ({len(filtered_df):,} filas filtradas)",
+            ])
+            with t_olap1:
+                olap1_view = sub_olap1[
+                    [
+                        "anio", "estacion_nombre", "region_tramo", "epoca_hidrologica",
+                        "registros", "nivel_medio_m", "nivel_max_m", "nivel_min_m",
+                        "lluvia_acum_mm", "oni_medio",
+                    ]
+                ].sort_values(["anio", "estacion_nombre", "epoca_hidrologica"], ascending=[False, True, True])
+                st.dataframe(
+                    olap1_view,
+                    width="stretch",
+                    hide_index=True,
+                    height=300,
+                    column_config={
+                        "anio": st.column_config.NumberColumn("Año", format="%d", width="small"),
+                        "estacion_nombre": st.column_config.TextColumn("Estación", width="medium"),
+                        "region_tramo": st.column_config.TextColumn("Tramo", width="medium"),
+                        "epoca_hidrologica": st.column_config.TextColumn("Época Hidrológica", width="medium"),
+                        "registros": st.column_config.NumberColumn("Días", format="%d", width="small"),
+                        "nivel_medio_m": st.column_config.NumberColumn("Nivel Medio", format="%.2f m"),
+                        "nivel_max_m": st.column_config.NumberColumn("Máximo", format="%.2f m"),
+                        "nivel_min_m": st.column_config.NumberColumn("Mínimo", format="%.2f m"),
+                        "lluvia_acum_mm": st.column_config.NumberColumn("Lluvia Acum.", format="%.0f mm"),
+                        "oni_medio": st.column_config.NumberColumn("ONI Medio", format="%.2f °C"),
+                    },
+                )
 
-        with t_olap2:
-            olap2_view = sub_olap2[
-                [
-                    "fase_enso", "estacion_nombre", "trimestre", "epoca_hidrologica",
-                    "registros", "nivel_medio_m", "nivel_std_m",
-                    "lluvia_media_diaria_mm", "capacidad_relativa_pct",
-                ]
-            ].sort_values(["fase_enso", "estacion_nombre", "trimestre"])
-            st.dataframe(
-                olap2_view,
-                width="stretch",
-                hide_index=True,
-                height=300,
-                column_config={
-                    "fase_enso": st.column_config.TextColumn("Fase ENSO", width="medium"),
-                    "estacion_nombre": st.column_config.TextColumn("Estación", width="medium"),
-                    "trimestre": st.column_config.TextColumn("Trimestre", width="small"),
-                    "epoca_hidrologica": st.column_config.TextColumn("Época Hidrológica", width="medium"),
-                    "registros": st.column_config.NumberColumn("Días", format="%d", width="small"),
-                    "nivel_medio_m": st.column_config.NumberColumn("Nivel Medio", format="%.2f m"),
-                    "nivel_std_m": st.column_config.NumberColumn("Desv. Est.", format="%.2f m"),
-                    "lluvia_media_diaria_mm": st.column_config.NumberColumn("Lluvia Media", format="%.2f mm/d"),
-                    "capacidad_relativa_pct": st.column_config.ProgressColumn(
-                        "Capacidad Relativa",
-                        format="%.1f%%",
-                        min_value=0,
-                        max_value=100,
-                    ),
-                },
-            )
+            with t_olap2:
+                olap2_view = sub_olap2[
+                    [
+                        "fase_enso", "estacion_nombre", "trimestre", "epoca_hidrologica",
+                        "registros", "nivel_medio_m", "nivel_std_m",
+                        "lluvia_media_diaria_mm", "capacidad_relativa_pct",
+                    ]
+                ].sort_values(["fase_enso", "estacion_nombre", "trimestre"])
+                st.dataframe(
+                    olap2_view,
+                    width="stretch",
+                    hide_index=True,
+                    height=300,
+                    column_config={
+                        "fase_enso": st.column_config.TextColumn("Fase ENSO", width="medium"),
+                        "estacion_nombre": st.column_config.TextColumn("Estación", width="medium"),
+                        "trimestre": st.column_config.TextColumn("Trimestre", width="small"),
+                        "epoca_hidrologica": st.column_config.TextColumn("Época Hidrológica", width="medium"),
+                        "registros": st.column_config.NumberColumn("Días", format="%d", width="small"),
+                        "nivel_medio_m": st.column_config.NumberColumn("Nivel Medio", format="%.2f m"),
+                        "nivel_std_m": st.column_config.NumberColumn("Desv. Est.", format="%.2f m"),
+                        "lluvia_media_diaria_mm": st.column_config.NumberColumn("Lluvia Media", format="%.2f mm/d"),
+                        "capacidad_relativa_pct": st.column_config.ProgressColumn(
+                            "Capacidad Relativa",
+                            format="%.1f%%",
+                            min_value=0,
+                            max_value=100,
+                        ),
+                    },
+                )
 
-        with t_raw:
-            display_cols = [
-                "ds", "estacion_nombre", "y", "target_y_t14",
-                "delta_y_3d", "lluvia_local_14d", "lluvia_cuenca_14d", "oni",
-                "epoca_hidrologica", "fase_enso", "nivel_minmax_pct", "quality",
-            ]
-            st.dataframe(
-                filtered_df[display_cols].head(500),
-                width="stretch",
-                hide_index=True,
-                height=300,
-                column_config={
-                    "ds": st.column_config.DateColumn("Fecha", format="YYYY-MM-DD"),
-                    "estacion_nombre": st.column_config.TextColumn("Estación", width="medium"),
-                    "y": st.column_config.NumberColumn("Nivel y(t)", format="%.2f m"),
-                    "target_y_t14": st.column_config.NumberColumn("Objetivo y(t+14)", format="%.2f m"),
-                    "delta_y_3d": st.column_config.NumberColumn("Cambio 3d", format="%+.2f m"),
-                    "lluvia_local_14d": st.column_config.NumberColumn("Lluvia Local 14d", format="%.1f mm"),
-                    "lluvia_cuenca_14d": st.column_config.NumberColumn("Lluvia Cuenca 14d", format="%.1f mm"),
-                    "oni": st.column_config.NumberColumn("ONI", format="%.2f °C"),
-                    "epoca_hidrologica": st.column_config.TextColumn("Época", width="medium"),
-                    "fase_enso": st.column_config.TextColumn("Fase ENSO", width="medium"),
-                    "nivel_minmax_pct": st.column_config.ProgressColumn(
-                        "Capacidad (%)",
-                        format="%.1f%%",
-                        min_value=0,
-                        max_value=100,
-                    ),
-                    "quality": st.column_config.TextColumn("Calidad"),
-                },
-            )
+            with t_raw:
+                display_cols = [
+                    "ds", "estacion_nombre", "y", "target_y_t14",
+                    "delta_y_3d", "lluvia_local_14d", "lluvia_cuenca_14d", "oni",
+                    "epoca_hidrologica", "fase_enso", "nivel_minmax_pct", "quality",
+                ]
+                st.dataframe(
+                    filtered_df[display_cols].head(500),
+                    width="stretch",
+                    hide_index=True,
+                    height=300,
+                    column_config={
+                        "ds": st.column_config.DateColumn("Fecha", format="YYYY-MM-DD"),
+                        "estacion_nombre": st.column_config.TextColumn("Estación", width="medium"),
+                        "y": st.column_config.NumberColumn("Nivel y(t)", format="%.2f m"),
+                        "target_y_t14": st.column_config.NumberColumn("Objetivo y(t+14)", format="%.2f m"),
+                        "delta_y_3d": st.column_config.NumberColumn("Cambio 3d", format="%+.2f m"),
+                        "lluvia_local_14d": st.column_config.NumberColumn("Lluvia Local 14d", format="%.1f mm"),
+                        "lluvia_cuenca_14d": st.column_config.NumberColumn("Lluvia Cuenca 14d", format="%.1f mm"),
+                        "oni": st.column_config.NumberColumn("ONI", format="%.2f °C"),
+                        "epoca_hidrologica": st.column_config.TextColumn("Época", width="medium"),
+                        "fase_enso": st.column_config.TextColumn("Fase ENSO", width="medium"),
+                        "nivel_minmax_pct": st.column_config.ProgressColumn(
+                            "Capacidad (%)",
+                            format="%.1f%%",
+                            min_value=0,
+                            max_value=100,
+                        ),
+                        "quality": st.column_config.TextColumn("Calidad"),
+                    },
+                )
 
     # =========================================================================
     # PESTAÑA 3: VISUALIZACIONES INTERACTIVAS + SELECTOR LIMPIO DE 6 FIGURAS
     # =========================================================================
     with tabs[2]:
-        v1, v2, v3 = st.columns([1.1, 1.1, 1.0])
-        with v1:
-            viz_station = st.selectbox(
-                "Estación (o Todas)",
-                options=["ALL", *list(STATION_LABELS.keys())],
-                format_func=lambda k: "Todas las estaciones" if k == "ALL" else STATION_LABELS[k],
-                index=3,  # Ciudad Bolívar por defecto
-                key="viz_station",
+        with st.container(border=True):
+            _render_card_header(
+                "📈 Explorador Interactivo Multivariable",
+                "Inspecciona series diarias por estación, ventana temporal y variable hidrometeorológica",
             )
-        with v2:
-            viz_years = st.slider("Ventana Temporal", 2009, 2024, (2016, 2024), key="viz_yr")
-        with v3:
-            viz_metric = st.selectbox(
-                "Variable a Explorar",
-                options=list(VARIABLE_META.keys()),
-                format_func=lambda m: VARIABLE_META[m],
-                key="viz_metric",
-            )
+            v1, v2, v3 = st.columns([1.0, 1.0, 1.25])
+            with v1:
+                viz_station = st.selectbox(
+                    "Estación (o Todas)",
+                    options=["ALL", *list(STATION_LABELS.keys())],
+                    format_func=lambda k: "Todas las estaciones" if k == "ALL" else STATION_LABELS[k],
+                    index=3,  # Ciudad Bolívar por defecto
+                    key="viz_station",
+                )
+            with v2:
+                viz_years = st.slider("Ventana Temporal", 2009, 2024, (2016, 2024), key="viz_yr")
+            with v3:
+                viz_metric = st.selectbox(
+                    "Variable a Explorar",
+                    options=list(VARIABLE_META.keys()),
+                    format_func=lambda m: VARIABLE_META[m],
+                    key="viz_metric",
+                )
+            st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
 
-        sub_viz = df[(df["anio"] >= viz_years[0]) & (df["anio"] <= viz_years[1])].copy()
-        if viz_station != "ALL":
-            sub_viz = sub_viz[sub_viz["unique_id"] == viz_station]
+            sub_viz = df[(df["anio"] >= viz_years[0]) & (df["anio"] <= viz_years[1])].copy()
+            if viz_station != "ALL":
+                sub_viz = sub_viz[sub_viz["unique_id"] == viz_station]
 
-        sub_viz = sub_viz.sort_values("ds")
-        y_label = VARIABLE_META[viz_metric]
-        active_stations = [s for s in STATION_COLOR_DOMAIN if s in set(sub_viz["estacion_nombre"])]
-        active_colors = [
-            STATION_COLOR_RANGE[STATION_COLOR_DOMAIN.index(s)] for s in active_stations
-        ]
+            sub_viz = sub_viz.sort_values("ds")
+            y_label = VARIABLE_META[viz_metric]
+            active_stations = [s for s in STATION_COLOR_DOMAIN if s in set(sub_viz["estacion_nombre"])]
+            active_colors = [
+                STATION_COLOR_RANGE[STATION_COLOR_DOMAIN.index(s)] for s in active_stations
+            ]
 
-        explorer_chart = (
-            alt.Chart(sub_viz)
-            .mark_line(strokeWidth=1.8)
-            .encode(
-                x=alt.X(
-                    "ds:T",
-                    title="Fecha (Año-Mes)",
-                    axis=alt.Axis(format="%Y-%m", labelAngle=0, tickCount=8),
-                ),
-                y=alt.Y(f"{viz_metric}:Q", title=y_label),
-                color=alt.Color(
-                    "estacion_nombre:N",
-                    title="Estación",
-                    legend=alt.Legend(orient="bottom") if len(active_stations) > 1 else None,
-                    scale=alt.Scale(domain=active_stations, range=active_colors),
-                ),
-                tooltip=[
-                    alt.Tooltip("ds:T", title="Fecha", format="%Y-%m-%d"),
-                    alt.Tooltip("estacion_nombre:N", title="Estación"),
-                    alt.Tooltip(f"{viz_metric}:Q", title=y_label, format=".2f"),
-                    alt.Tooltip("epoca_hidrologica:N", title="Época"),
-                    alt.Tooltip("fase_enso:N", title="ENSO"),
-                ],
-            )
-            .properties(height=360, title=f"Explorador Interactivo: {y_label} ({viz_years[0]}–{viz_years[1]})")
-            .interactive()
-        )
-        st.altair_chart(explorer_chart, width="stretch")
-
-        st.divider()
-        st.subheader("Galería de Figuras del Estudio (Actividad 7)")
-        figs_list = mongo_doc["visualizaciones_generadas"]
-        fig_options = [f"Fig {idx + 1}: {item['id'].upper()}" for idx, item in enumerate(figs_list)]
-        fig_labels = {
-            0: "Fig 1 · Serie Temporal",
-            1: "Fig 2 · Épocas",
-            2: "Fig 3 · ENSO",
-            3: "Fig 4 · Propagación",
-            4: "Fig 5 · Heatmap OLAP",
-            5: "Fig 6 · Modelo ML",
-        }
-        chosen_idx = st.segmented_control(
-            "Selecciona una figura para inspeccionarla:",
-            options=list(range(len(figs_list))),
-            format_func=lambda i: fig_labels.get(i, fig_options[i]),
-            default=0,
-        )
-        if chosen_idx is None:
-            chosen_idx = 0
-
-        f_item = figs_list[chosen_idx]
-        img_file = PROJECT_ROOT / f_item["archivo"]
-        st.markdown(f"**{f_item['titulo']}** · *{f_item['tipo']}*")
-        st.info(f"**Insight clave:** {f_item['insight']}")
-        if img_file.exists():
-            st.image(str(img_file), width="stretch")
-
-    # =========================================================================
-    # PESTAÑA 4: MODELO ML (GRÁFICOS DE DESEMPEÑO + SIMULADOR SIMPLIFICADO)
-    # =========================================================================
-    with tabs[3]:
-        p_col_sel, _ = st.columns([1.0, 2.0])
-        with p_col_sel:
-            eval_station = st.selectbox(
-                "Estación en Evaluación (Test 2023–2024)",
-                options=list(STATION_LABELS.keys()),
-                format_func=lambda k: STATION_LABELS[k],
-                index=2,  # Ciudad Bolívar
-                key="eval_station",
-            )
-
-        sub_preds = preds_test[preds_test["unique_id"] == eval_station].sort_values("ds").copy()
-        preds_long = sub_preds.melt(
-            id_vars=["ds"],
-            value_vars=["target_y_t14", "pred_ganador", "pred_naive"],
-            var_name="Serie",
-            value_name="Nivel_m",
-        )
-        serie_map = {
-            "target_y_t14": "Real y(t+14)",
-            "pred_ganador": f"Predicción {artifact['summary']['modelo_ganador']}",
-            "pred_naive": "Línea Base (Naive)",
-        }
-        preds_long["Serie"] = preds_long["Serie"].map(serie_map)
-
-        pred_chart = (
-            alt.Chart(preds_long)
-            .mark_line(strokeWidth=2)
-            .encode(
-                x=alt.X(
-                    "ds:T",
-                    title="Fecha de Emisión del Pronóstico (Año-Mes)",
-                    axis=alt.Axis(format="%Y-%m", labelAngle=0, tickCount=8),
-                ),
-                y=alt.Y("Nivel_m:Q", title="Nivel a +14 días (m s.n.m.)"),
-                color=alt.Color(
-                    "Serie:N",
-                    legend=alt.Legend(orient="bottom"),
-                    scale=alt.Scale(
-                        domain=[
-                            "Real y(t+14)",
-                            f"Predicción {artifact['summary']['modelo_ganador']}",
-                            "Línea Base (Naive)",
-                        ],
-                        range=["#56B4E9", "#D55E00", "#AAAAAA"],
-                    ),
-                ),
-                strokeDash=alt.StrokeDash(
-                    "Serie:N",
-                    scale=alt.Scale(
-                        domain=[
-                            "Real y(t+14)",
-                            f"Predicción {artifact['summary']['modelo_ganador']}",
-                            "Línea Base (Naive)",
-                        ],
-                        range=[[1, 0], [1, 0], [4, 4]],
-                    ),
-                ),
-                tooltip=[
-                    alt.Tooltip("ds:T", title="Fecha", format="%Y-%m-%d"),
-                    alt.Tooltip("Serie:N", title="Serie"),
-                    alt.Tooltip("Nivel_m:Q", title="Nivel (m s.n.m.)", format=".2f"),
-                ],
-            )
-            .properties(
-                height=340,
-                title=f"Real vs. Predicho a +14 Días — {STATION_LABELS[eval_station]} (m s.n.m., 2023–2024)",
-            )
-            .interactive()
-        )
-        st.altair_chart(pred_chart, width="stretch")
-
-        mc1, mc2 = st.columns(2)
-        with mc1:
-            st_df = pd.DataFrame(mod["metricas_por_estacion"])
-            st_long = st_df.melt(
-                id_vars=["estacion"],
-                value_vars=["mae_baseline_m", "mae_modelo_m"],
-                var_name="Tipo",
-                value_name="MAE_m",
-            )
-            st_long["Tipo"] = st_long["Tipo"].map({
-                "mae_baseline_m": "Línea Base (Naive)",
-                "mae_modelo_m": artifact["summary"]["modelo_ganador"],
-            })
-            st_chart = (
-                alt.Chart(st_long)
-                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+            explorer_chart = (
+                alt.Chart(sub_viz)
+                .mark_line(strokeWidth=1.8)
                 .encode(
                     x=alt.X(
-                        "estacion:N",
-                        title="Estación",
-                        sort=STATION_COLOR_DOMAIN,
-                        axis=alt.Axis(labelAngle=0, labelLimit=130),
+                        "ds:T",
+                        title="Fecha (Año-Mes)",
+                        axis=alt.Axis(format="%Y-%m", labelAngle=0, tickCount=8),
                     ),
-                    xOffset="Tipo:N",
-                    y=alt.Y("MAE_m:Q", title="Error MAE (m)"),
+                    y=alt.Y(f"{viz_metric}:Q", title=y_label),
                     color=alt.Color(
-                        "Tipo:N",
-                        title="Modelo",
+                        "estacion_nombre:N",
+                        title="Estación",
+                        legend=alt.Legend(orient="bottom") if len(active_stations) > 1 else None,
+                        scale=alt.Scale(domain=active_stations, range=active_colors),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("ds:T", title="Fecha", format="%Y-%m-%d"),
+                        alt.Tooltip("estacion_nombre:N", title="Estación"),
+                        alt.Tooltip(f"{viz_metric}:Q", title=y_label, format=".2f"),
+                        alt.Tooltip("epoca_hidrologica:N", title="Época"),
+                        alt.Tooltip("fase_enso:N", title="ENSO"),
+                    ],
+                )
+                .interactive()
+            )
+            explorer_chart = _style_altair_chart(
+                explorer_chart,
+                title=f"Serie Diaria: {y_label} ({viz_years[0]}–{viz_years[1]})",
+                subtitle=f"Filtro activo: {'Todas las estaciones' if viz_station == 'ALL' else STATION_LABELS[viz_station]}",
+                height=355,
+            )
+            st.altair_chart(explorer_chart, width="stretch")
+
+        with st.container(border=True):
+            _render_card_header(
+                "🖼️ Galería de Figuras del Estudio (Actividad 7)",
+                "Láminas exportadas a 300 DPI integradas en el reporte técnico PDF",
+            )
+            figs_list = mongo_doc["visualizaciones_generadas"]
+            fig_options = [f"Fig {idx + 1}: {item['id'].upper()}" for idx, item in enumerate(figs_list)]
+            fig_labels = {
+                0: "Fig 1 · Serie Temporal",
+                1: "Fig 2 · Épocas",
+                2: "Fig 3 · ENSO",
+                3: "Fig 4 · Propagación",
+                4: "Fig 5 · Heatmap OLAP",
+                5: "Fig 6 · Modelo ML",
+            }
+            chosen_idx = st.segmented_control(
+                "Selecciona una figura para inspeccionarla:",
+                options=list(range(len(figs_list))),
+                format_func=lambda i: fig_labels.get(i, fig_options[i]),
+                default=0,
+            )
+            if chosen_idx is None:
+                chosen_idx = 0
+
+            f_item = figs_list[chosen_idx]
+            img_file = PROJECT_ROOT / f_item["archivo"]
+            st.markdown(f"**{f_item['titulo']}** · *{f_item['tipo']}*")
+            st.info(f"**Insight clave:** {f_item['insight']}")
+            if img_file.exists():
+                st.image(str(img_file), width="stretch")
+
+    # =========================================================================
+    # PESTAÑA 4: MODELO ML (GRÁFICOS DE DESEMPEÑO + SIMULADOR PRECARGADO)
+    # =========================================================================
+    with tabs[3]:
+        with st.container(border=True):
+            p_col_sel, _ = st.columns([1.0, 2.0])
+            with p_col_sel:
+                eval_station = st.selectbox(
+                    "Estación en Evaluación (Test 2023–2024)",
+                    options=list(STATION_LABELS.keys()),
+                    format_func=lambda k: STATION_LABELS[k],
+                    index=2,  # Ciudad Bolívar
+                    key="eval_station",
+                )
+
+            sub_preds = preds_test[preds_test["unique_id"] == eval_station].sort_values("ds").copy()
+            preds_long = sub_preds.melt(
+                id_vars=["ds"],
+                value_vars=["target_y_t14", "pred_ganador", "pred_naive"],
+                var_name="Serie",
+                value_name="Nivel_m",
+            )
+            serie_map = {
+                "target_y_t14": "Real y(t+14)",
+                "pred_ganador": f"Predicción {artifact['summary']['modelo_ganador']}",
+                "pred_naive": "Línea Base (Naive)",
+            }
+            preds_long["Serie"] = preds_long["Serie"].map(serie_map)
+
+            pred_chart = (
+                alt.Chart(preds_long)
+                .mark_line(strokeWidth=2)
+                .encode(
+                    x=alt.X(
+                        "ds:T",
+                        title="Fecha de Emisión del Pronóstico (Año-Mes)",
+                        axis=alt.Axis(format="%Y-%m", labelAngle=0, tickCount=8),
+                    ),
+                    y=alt.Y("Nivel_m:Q", title="Nivel a +14 días (m s.n.m.)"),
+                    color=alt.Color(
+                        "Serie:N",
                         legend=alt.Legend(orient="bottom"),
                         scale=alt.Scale(
-                            domain=["Línea Base (Naive)", artifact["summary"]["modelo_ganador"]],
-                            range=["#AAAAAA", "#D55E00"],
+                            domain=[
+                                "Real y(t+14)",
+                                f"Predicción {artifact['summary']['modelo_ganador']}",
+                                "Línea Base (Naive)",
+                            ],
+                            range=["#56B4E9", "#D55E00", "#94A3B8"],
+                        ),
+                    ),
+                    strokeDash=alt.StrokeDash(
+                        "Serie:N",
+                        scale=alt.Scale(
+                            domain=[
+                                "Real y(t+14)",
+                                f"Predicción {artifact['summary']['modelo_ganador']}",
+                                "Línea Base (Naive)",
+                            ],
+                            range=[[1, 0], [1, 0], [4, 4]],
                         ),
                     ),
                     tooltip=[
-                        alt.Tooltip("estacion:N", title="Estación"),
-                        alt.Tooltip("Tipo:N", title="Modelo"),
-                        alt.Tooltip("MAE_m:Q", title="MAE (m)", format=".4f"),
+                        alt.Tooltip("ds:T", title="Fecha", format="%Y-%m-%d"),
+                        alt.Tooltip("Serie:N", title="Serie"),
+                        alt.Tooltip("Nivel_m:Q", title="Nivel (m s.n.m.)", format=".2f"),
                     ],
                 )
-                .properties(height=320, title="Error MAE por Estación (metros): Ganador vs. Naive")
+                .interactive()
             )
-            st.altair_chart(st_chart, width="stretch")
+            pred_chart = _style_altair_chart(
+                pred_chart,
+                title=f"Real vs. Predicho a +14 Días — {STATION_LABELS[eval_station]}",
+                subtitle="Validación fuera de muestra sobre el período de prueba 2023–2024 (m s.n.m.)",
+                height=340,
+            )
+            st.altair_chart(pred_chart, width="stretch")
+
+        mc1, mc2 = st.columns(2)
+        with mc1:
+            with st.container(border=True):
+                st_df = pd.DataFrame(mod["metricas_por_estacion"])
+                st_long = st_df.melt(
+                    id_vars=["estacion"],
+                    value_vars=["mae_baseline_m", "mae_modelo_m"],
+                    var_name="Tipo",
+                    value_name="MAE_m",
+                )
+                st_long["Tipo"] = st_long["Tipo"].map({
+                    "mae_baseline_m": "Línea Base (Naive)",
+                    "mae_modelo_m": artifact["summary"]["modelo_ganador"],
+                })
+                st_chart = (
+                    alt.Chart(st_long)
+                    .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                    .encode(
+                        x=alt.X(
+                            "estacion:N",
+                            title="Estación",
+                            sort=STATION_COLOR_DOMAIN,
+                            axis=alt.Axis(labelAngle=0, labelLimit=130),
+                        ),
+                        xOffset="Tipo:N",
+                        y=alt.Y("MAE_m:Q", title="Error MAE (m)"),
+                        color=alt.Color(
+                            "Tipo:N",
+                            title="Modelo",
+                            legend=alt.Legend(orient="bottom"),
+                            scale=alt.Scale(
+                                domain=["Línea Base (Naive)", artifact["summary"]["modelo_ganador"]],
+                                range=["#94A3B8", "#D55E00"],
+                            ),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("estacion:N", title="Estación"),
+                            alt.Tooltip("Tipo:N", title="Modelo"),
+                            alt.Tooltip("MAE_m:Q", title="MAE (m)", format=".4f"),
+                        ],
+                    )
+                )
+                st_chart = _style_altair_chart(
+                    st_chart,
+                    title="Error MAE por Estación (m): Ganador vs. Naive",
+                    subtitle="Desempeño desagregado aguas abajo en Test 2023–2024",
+                    height=320,
+                )
+                st.altair_chart(st_chart, width="stretch")
 
         with mc2:
-            imp_df = pd.DataFrame(mod["variables_importantes"])
-            imp_chart = (
-                alt.Chart(imp_df)
-                .mark_bar(cornerRadiusEnd=5, color="#0072B2")
-                .encode(
-                    x=alt.X("importancia_pct:Q", title="Importancia Relativa (%)"),
-                    y=alt.Y(
-                        "variable:N",
-                        sort="-x",
-                        title="Variable Predictora",
-                        axis=alt.Axis(labelOverlap=False, labelLimit=160),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("variable:N", title="Variable"),
-                        alt.Tooltip("importancia_pct:Q", title="Importancia (%)", format=".2f"),
-                        alt.Tooltip("interpretacion_negocio:N", title="Significado"),
-                    ],
+            with st.container(border=True):
+                imp_df = pd.DataFrame(mod["variables_importantes"])
+                imp_chart = (
+                    alt.Chart(imp_df)
+                    .mark_bar(cornerRadiusEnd=5, color="#0072B2")
+                    .encode(
+                        x=alt.X("importancia_pct:Q", title="Importancia Relativa (%)"),
+                        y=alt.Y(
+                            "variable:N",
+                            sort="-x",
+                            title="Variable Predictora",
+                            axis=alt.Axis(labelOverlap=False, labelLimit=160),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("variable:N", title="Variable"),
+                            alt.Tooltip("importancia_pct:Q", title="Importancia (%)", format=".2f"),
+                            alt.Tooltip("interpretacion_negocio:N", title="Significado"),
+                        ],
+                    )
                 )
-                .properties(height=320, title="Top 10 Variables Más Influyentes — XGBoost (%)")
-            )
-            st.altair_chart(imp_chart, width="stretch")
+                imp_chart = _style_altair_chart(
+                    imp_chart,
+                    title="Top 10 Variables Más Influyentes — XGBoost (%)",
+                    subtitle="Importancia relativa en XGBoost (hidrometría, lluvia y estacionalidad)",
+                    height=320,
+                )
+                st.altair_chart(imp_chart, width="stretch")
 
         with st.expander("📋 Desempeño detallado por Modelo y por Estación (Tarjetas y Tablas)", expanded=False):
             tab_m, tab_s = st.tabs(["🏆 Comparación de Modelos", "📍 Desempeño por Estación"])
@@ -1043,18 +1884,22 @@ def main() -> None:
                 m_cards = st.columns(len(comp_tbl))
                 for idx, row in comp_tbl.iterrows():
                     with m_cards[idx]:
-                        with st.container(border=True):
-                            tag = " 🏆" if row["modelo"] == winner_name else ""
-                            st.markdown(f"**{row['modelo']}{tag}**")
-                            st.caption(row["tipo"])
-                            delta_txt = (
-                                f"-{row['mejora_vs_baseline_pct']:.2f}% vs Naive"
-                                if row["mejora_vs_baseline_pct"] > 0
-                                else "Referencia base"
-                            )
-                            st.metric("MAE", f"{row['mae_m']:.4f} m", delta_txt)
-                            st.caption(f"RMSE: `{row['rmse_m']:.4f} m` · R²: `{row['r2']:.4f}`")
+                        is_win = row["modelo"] == winner_name
+                        tag = " 🏆" if is_win else ""
+                        badge_txt = (
+                            f"▼ -{row['mejora_vs_baseline_pct']:.2f}% MAE · R² {row['r2']:.4f}"
+                            if row["mejora_vs_baseline_pct"] > 0
+                            else f"Referencia base · R² {row['r2']:.4f}"
+                        )
+                        _render_kpi_card(
+                            f"{row['modelo']}{tag}",
+                            f"{row['mae_m']:.4f} m",
+                            badge_txt,
+                            tone="positive" if is_win else ("info" if row["mejora_vs_baseline_pct"] > 0 else "neutral"),
+                            accent="#009E73" if is_win else ("#0072B2" if row["mejora_vs_baseline_pct"] > 0 else "#94A3B8"),
+                        )
 
+                st.markdown("<div style='height:0.65rem'></div>", unsafe_allow_html=True)
                 st.dataframe(
                     comp_tbl,
                     width="stretch",
@@ -1078,16 +1923,15 @@ def main() -> None:
                 s_cards = st.columns(len(st_df))
                 for idx, (_, row) in enumerate(st_df.iterrows()):
                     with s_cards[idx]:
-                        with st.container(border=True):
-                            st.markdown(f"**{row['estacion']}**")
-                            st.caption(f"{int(row['registros_test'])} días de prueba")
-                            st.metric(
-                                "MAE Ganador",
-                                f"{row['mae_modelo_m']:.4f} m",
-                                f"-{row['mejora_mae_pct']:.2f}% vs Naive ({row['mae_baseline_m']:.3f} m)",
-                            )
-                            st.caption(f"RMSE: `{row['rmse_modelo_m']:.4f} m` · R²: `{row['r2_modelo']:.4f}`")
+                        _render_kpi_card(
+                            f"{row['estacion']} ({int(row['registros_test'])}d)",
+                            f"{row['mae_modelo_m']:.4f} m",
+                            f"▼ -{row['mejora_mae_pct']:.2f}% vs. Naive ({row['mae_baseline_m']:.3f} m)",
+                            tone="positive",
+                            accent=STATION_COLOR_RANGE[idx % len(STATION_COLOR_RANGE)],
+                        )
 
+                st.markdown("<div style='height:0.65rem'></div>", unsafe_allow_html=True)
                 st.dataframe(
                     st_df.drop(columns=["unique_id"], errors="ignore"),
                     width="stretch",
@@ -1108,168 +1952,171 @@ def main() -> None:
                     },
                 )
 
-        st.divider()
-        st.subheader("🔮 Simulador de Pronóstico a +14 Días")
-
-        s1, s2, s3 = st.columns([1.0, 1.0, 1.3])
-        with s1:
-            form_station = st.selectbox(
-                "Estación Objetivo",
-                options=list(STATION_LABELS.keys()),
-                format_func=lambda k: STATION_LABELS[k],
-                index=2,
-                key="sim_station",
-            )
-        with s2:
-            model_choice = st.selectbox(
-                "Modelo Entrenado",
-                options=list(artifact["all_pipelines"].keys()),
-                index=2,
-                key="sim_model",
-            )
-        with s3:
-            scenario_choice = st.radio(
-                "Escenario Rápido",
-                options=[
-                    "Último registro",
-                    "🌊 Crecida (Aguas Altas / La Niña)",
-                    "☀️ Estiaje (Aguas Bajas / El Niño)",
-                ],
-                horizontal=True,
-                key="sim_scenario",
+        with st.container(border=True):
+            _render_card_header(
+                "🔮 Simulador de Pronóstico a +14 Días",
+                "Evalúa en tiempo real el nivel esperado en 2 semanas según escenario hidrológico o valores personalizados",
             )
 
-        defaults, scenario_note = _get_scenario_values(
-            df, artifact["defaults_by_station"], form_station, scenario_choice
-        )
-        st.caption(f"Valores iniciales cargados desde: **{scenario_note}**")
-
-        # Variable aguas arriba más representativa según la estación
-        if form_station == "caicara":
-            up_key, up_label = "ayacucho_lag_7", "Nivel Puerto Ayacucho hace 7d (m)"
-        else:
-            up_key, up_label = "caicara_lag_7", "Nivel Caicara del Orinoco hace 7d (m)"
-
-        key_prefix = f"sim_{form_station}_{scenario_choice}"
-
-        with st.form("prediction_form"):
-            fc1, fc2, fc3 = st.columns(3)
-            with fc1:
-                in_y = st.number_input(
-                    "1. Nivel actual en la estación y(t) [m]",
-                    value=round(float(defaults["y"]), 2),
-                    step=0.1,
-                    key=f"{key_prefix}_y",
+            s1, s2, s3 = st.columns([1.0, 1.0, 1.3])
+            with s1:
+                form_station = st.selectbox(
+                    "Estación Objetivo",
+                    options=list(STATION_LABELS.keys()),
+                    format_func=lambda k: STATION_LABELS[k],
+                    index=2,
+                    key="sim_station",
                 )
-                in_delta_3d = st.number_input(
-                    "2. Cambio últimos 3 días Δy(3d) [m]",
-                    value=round(float(defaults["delta_y_3d"]), 3),
-                    step=0.05,
-                    key=f"{key_prefix}_d3",
+            with s2:
+                model_choice = st.selectbox(
+                    "Modelo Entrenado",
+                    options=list(artifact["all_pipelines"].keys()),
+                    index=2,
+                    key="sim_model",
                 )
-            with fc2:
-                in_upstream = st.number_input(
-                    f"3. {up_label}",
-                    value=round(float(defaults[up_key]), 2),
-                    step=0.1,
-                    key=f"{key_prefix}_up",
-                )
-                in_lluvia_cuenca = st.number_input(
-                    "4. Lluvia media en la cuenca 14d [mm]",
-                    value=round(float(defaults["lluvia_cuenca_14d"]), 1),
-                    step=5.0,
-                    key=f"{key_prefix}_rain_c",
-                )
-            with fc3:
-                epoca_idx = EPOCA_OPTIONS.index(defaults["epoca_hidrologica"]) if defaults["epoca_hidrologica"] in EPOCA_OPTIONS else 3
-                enso_idx = ENSO_OPTIONS.index(defaults["fase_enso"]) if defaults["fase_enso"] in ENSO_OPTIONS else 1
-                in_epoca = st.selectbox(
-                    "5. Época Hidrológica",
-                    options=EPOCA_OPTIONS,
-                    index=epoca_idx,
-                    key=f"{key_prefix}_epoca",
-                )
-                in_enso = st.selectbox(
-                    "Fase Climática ENSO",
-                    options=ENSO_OPTIONS,
-                    index=enso_idx,
-                    key=f"{key_prefix}_enso",
+            with s3:
+                scenario_choice = st.radio(
+                    "Escenario Rápido",
+                    options=[
+                        "Último registro",
+                        "🌊 Crecida (Aguas Altas / La Niña)",
+                        "☀️ Estiaje (Aguas Bajas / El Niño)",
+                    ],
+                    horizontal=True,
+                    key="sim_scenario",
                 )
 
-            with st.expander("⚙️ Ajustes avanzados (rezagos adicionales, lluvia local y calendario)", expanded=False):
-                a1, a2, a3 = st.columns(3)
-                with a1:
-                    in_y_lag7 = st.number_input(
-                        "Nivel hace 7 días y(t-7) [m]",
-                        value=round(float(defaults["y_lag_7"]), 2),
+            defaults, scenario_note = _get_scenario_values(
+                df, artifact["defaults_by_station"], form_station, scenario_choice
+            )
+            st.caption(f"Valores iniciales cargados desde: **{scenario_note}**")
+
+            # Variable aguas arriba más representativa según la estación
+            if form_station == "caicara":
+                up_key, up_label = "ayacucho_lag_7", "Nivel Puerto Ayacucho hace 7d (m)"
+            else:
+                up_key, up_label = "caicara_lag_7", "Nivel Caicara del Orinoco hace 7d (m)"
+
+            key_prefix = f"sim_{form_station}_{scenario_choice}"
+
+            with st.form("prediction_form"):
+                fc1, fc2, fc3 = st.columns(3)
+                with fc1:
+                    in_y = st.number_input(
+                        "1. Nivel actual en la estación y(t) [m]",
+                        value=round(float(defaults["y"]), 2),
                         step=0.1,
-                        key=f"{key_prefix}_yl7",
+                        key=f"{key_prefix}_y",
                     )
-                    in_y_lag14 = st.number_input(
-                        "Nivel hace 14 días y(t-14) [m]",
-                        value=round(float(defaults["y_lag_14"]), 2),
-                        step=0.1,
-                        key=f"{key_prefix}_yl14",
-                    )
-                    in_delta_1d = st.number_input(
-                        "Cambio últimas 24 h Δy(1d) [m]",
-                        value=round(float(defaults["delta_y_1d"]), 3),
+                    in_delta_3d = st.number_input(
+                        "2. Cambio últimos 3 días Δy(3d) [m]",
+                        value=round(float(defaults["delta_y_3d"]), 3),
                         step=0.05,
-                        key=f"{key_prefix}_d1",
+                        key=f"{key_prefix}_d3",
                     )
-                with a2:
-                    if up_key == "ayacucho_lag_7":
-                        in_ayacucho_7 = in_upstream
-                        in_caicara_7 = st.number_input(
-                            "Nivel Caicara (t-7 días) [m]",
-                            value=round(float(defaults["caicara_lag_7"]), 2),
-                            step=0.1,
-                            key=f"{key_prefix}_cai7",
-                        )
-                    else:
-                        in_caicara_7 = in_upstream
-                        in_ayacucho_7 = st.number_input(
-                            "Nivel Ayacucho (t-7 días) [m]",
-                            value=round(float(defaults["ayacucho_lag_7"]), 2),
-                            step=0.1,
-                            key=f"{key_prefix}_aya7",
-                        )
-                    in_ayacucho_14 = st.number_input(
-                        "Nivel Ayacucho (t-14 días) [m]",
-                        value=round(float(defaults["ayacucho_lag_14"]), 2),
+                with fc2:
+                    in_upstream = st.number_input(
+                        f"3. {up_label}",
+                        value=round(float(defaults[up_key]), 2),
                         step=0.1,
-                        key=f"{key_prefix}_aya14",
+                        key=f"{key_prefix}_up",
                     )
-                    in_cb_1 = st.number_input(
-                        "Nivel Ciudad Bolívar (t-1 día) [m]",
-                        value=round(float(defaults["ciudad_bolivar_lag_1"]), 2),
-                        step=0.1,
-                        key=f"{key_prefix}_cb1",
-                    )
-                with a3:
-                    in_lluvia_loc = st.number_input(
-                        "Lluvia local acumulada 14d [mm]",
-                        value=round(float(defaults["lluvia_local_14d"]), 1),
+                    in_lluvia_cuenca = st.number_input(
+                        "4. Lluvia media en la cuenca 14d [mm]",
+                        value=round(float(defaults["lluvia_cuenca_14d"]), 1),
                         step=5.0,
-                        key=f"{key_prefix}_rain_l",
+                        key=f"{key_prefix}_rain_c",
                     )
-                    in_oni = st.number_input(
-                        "Índice NOAA ONI (°C)",
-                        value=round(float(defaults["oni"]), 2),
-                        step=0.1,
-                        key=f"{key_prefix}_oni",
+                with fc3:
+                    epoca_idx = EPOCA_OPTIONS.index(defaults["epoca_hidrologica"]) if defaults["epoca_hidrologica"] in EPOCA_OPTIONS else 3
+                    enso_idx = ENSO_OPTIONS.index(defaults["fase_enso"]) if defaults["fase_enso"] in ENSO_OPTIONS else 1
+                    in_epoca = st.selectbox(
+                        "5. Época Hidrológica",
+                        options=EPOCA_OPTIONS,
+                        index=epoca_idx,
+                        key=f"{key_prefix}_epoca",
                     )
-                    in_doy = st.slider(
-                        "Día del Año (1–365)",
-                        1,
-                        365,
-                        int(defaults.get("doy", 220)),
-                        key=f"{key_prefix}_doy",
+                    in_enso = st.selectbox(
+                        "Fase Climática ENSO",
+                        options=ENSO_OPTIONS,
+                        index=enso_idx,
+                        key=f"{key_prefix}_enso",
                     )
 
-            submitted = st.form_submit_button("Calcular Pronóstico a +14 Días", type="primary")
+                with st.expander("⚙️ Ajustes avanzados (rezagos adicionales, lluvia local y calendario)", expanded=False):
+                    a1, a2, a3 = st.columns(3)
+                    with a1:
+                        in_y_lag7 = st.number_input(
+                            "Nivel hace 7 días y(t-7) [m]",
+                            value=round(float(defaults["y_lag_7"]), 2),
+                            step=0.1,
+                            key=f"{key_prefix}_yl7",
+                        )
+                        in_y_lag14 = st.number_input(
+                            "Nivel hace 14 días y(t-14) [m]",
+                            value=round(float(defaults["y_lag_14"]), 2),
+                            step=0.1,
+                            key=f"{key_prefix}_yl14",
+                        )
+                        in_delta_1d = st.number_input(
+                            "Cambio últimas 24 h Δy(1d) [m]",
+                            value=round(float(defaults["delta_y_1d"]), 3),
+                            step=0.05,
+                            key=f"{key_prefix}_d1",
+                        )
+                    with a2:
+                        if up_key == "ayacucho_lag_7":
+                            in_ayacucho_7 = in_upstream
+                            in_caicara_7 = st.number_input(
+                                "Nivel Caicara (t-7 días) [m]",
+                                value=round(float(defaults["caicara_lag_7"]), 2),
+                                step=0.1,
+                                key=f"{key_prefix}_cai7",
+                            )
+                        else:
+                            in_caicara_7 = in_upstream
+                            in_ayacucho_7 = st.number_input(
+                                "Nivel Ayacucho (t-7 días) [m]",
+                                value=round(float(defaults["ayacucho_lag_7"]), 2),
+                                step=0.1,
+                                key=f"{key_prefix}_aya7",
+                            )
+                        in_ayacucho_14 = st.number_input(
+                            "Nivel Ayacucho (t-14 días) [m]",
+                            value=round(float(defaults["ayacucho_lag_14"]), 2),
+                            step=0.1,
+                            key=f"{key_prefix}_aya14",
+                        )
+                        in_cb_1 = st.number_input(
+                            "Nivel Ciudad Bolívar (t-1 día) [m]",
+                            value=round(float(defaults["ciudad_bolivar_lag_1"]), 2),
+                            step=0.1,
+                            key=f"{key_prefix}_cb1",
+                        )
+                    with a3:
+                        in_lluvia_loc = st.number_input(
+                            "Lluvia local acumulada 14d [mm]",
+                            value=round(float(defaults["lluvia_local_14d"]), 1),
+                            step=5.0,
+                            key=f"{key_prefix}_rain_l",
+                        )
+                        in_oni = st.number_input(
+                            "Índice NOAA ONI (°C)",
+                            value=round(float(defaults["oni"]), 2),
+                            step=0.1,
+                            key=f"{key_prefix}_oni",
+                        )
+                        in_doy = st.slider(
+                            "Día del Año (1–365)",
+                            1,
+                            365,
+                            int(defaults.get("doy", 220)),
+                            key=f"{key_prefix}_doy",
+                        )
 
-        if submitted:
+                submitted = st.form_submit_button("Calcular Pronóstico a +14 Días", type="primary")
+
+            # Cálculo inmediato sobre valores activos del formulario (precargado al abrir la pestaña)
             sin_doy_val = float(np.sin(2.0 * np.pi * in_doy / 365.25))
             cos_doy_val = float(np.cos(2.0 * np.pi * in_doy / 365.25))
             delta_7d_val = float(in_y - in_y_lag7)
@@ -1299,23 +2146,47 @@ def main() -> None:
             pred_t14 = float(chosen_pipe.predict(input_df)[0])
             expected_change = pred_t14 - in_y
 
+            if expected_change >= 0.15:
+                dir_badge = f"▲ Ascenso proyectado ({expected_change:+.2f} m en 14d)"
+                dir_tone = "negative"
+                dir_accent = "#D55E00"
+            elif expected_change <= -0.15:
+                dir_badge = f"▼ Descenso proyectado ({expected_change:+.2f} m en 14d)"
+                dir_tone = "info"
+                dir_accent = "#0072B2"
+            else:
+                dir_badge = f"● Nivel estable ({expected_change:+.2f} m en 14d)"
+                dir_tone = "neutral"
+                dir_accent = "#009E73"
+
+            state_tag = "Resultado actualizado con tus parámetros" if submitted else "Resultado precargado del escenario activo"
+            st.caption(f"**{state_tag}** · Estación: `{STATION_LABELS[form_station]}` · Modelo: `{model_choice}`")
+
             res_c1, res_c2, res_c3 = st.columns(3)
-            res_c1.metric(
-                f"Nivel Actual y(t) en {STATION_LABELS[form_station]}",
-                f"{in_y:.2f} m s.n.m.",
-            )
-            res_c2.metric(
-                f"Pronóstico a +14 Días ({model_choice})",
-                f"{pred_t14:.2f} m s.n.m.",
-                f"{expected_change:+.2f} m en 2 semanas",
-                delta_color="off",
-            )
-            res_c3.metric(
-                "Línea Base (Naive)",
-                f"{in_y:.2f} m s.n.m.",
-                "Sin cambio (0.00 m)",
-                delta_color="off",
-            )
+            with res_c1:
+                _render_kpi_card(
+                    "Nivel Actual y(t)",
+                    f"{in_y:.2f} m s.n.m.",
+                    f"{STATION_LABELS[form_station]} · {in_epoca.split(' ')[1]}",
+                    tone="neutral",
+                    accent="#56B4E9",
+                )
+            with res_c2:
+                _render_kpi_card(
+                    "Pronóstico +14 Días",
+                    f"{pred_t14:.2f} m s.n.m.",
+                    dir_badge,
+                    tone=dir_tone,
+                    accent=dir_accent,
+                )
+            with res_c3:
+                _render_kpi_card(
+                    "Línea Base (Naive)",
+                    f"{in_y:.2f} m s.n.m.",
+                    "Sin cambio (0.00 m en 2 semanas)",
+                    tone="neutral",
+                    accent="#94A3B8",
+                )
 
             sim_df = pd.DataFrame([
                 {
@@ -1372,18 +2243,16 @@ def main() -> None:
                         legend=None,
                         scale=alt.Scale(
                             domain=["1. Nivel Actual (Hoy)", "2. Pronóstico (+14 días)"],
-                            range=["#56B4E9", "#FF7B29"],
+                            range=["#0369A1", "#C2410C"],
                         ),
                     ),
                 )
             )
-            sim_chart = (
-                (sim_bars + sim_text)
-                .properties(
-                    height=175,
-                    title=f"Comparación: Nivel Actual vs. Pronóstico +14 Días en {STATION_LABELS[form_station]} (m s.n.m.)",
-                )
-                .configure_view(strokeWidth=0)
+            sim_chart = _style_altair_chart(
+                sim_bars + sim_text,
+                title=f"Comparación: Nivel Actual vs. Pronóstico +14 Días en {STATION_LABELS[form_station]}",
+                subtitle=f"Variación proyectada: {expected_change:+.2f} m · Fase {in_enso}",
+                height=185,
             )
             st.altair_chart(sim_chart, width="stretch")
 
@@ -1391,44 +2260,57 @@ def main() -> None:
     # PESTAÑA 5: INSIGHTS (MONGODB) + GLOSARIO + REPORTE PDF
     # =========================================================================
     with tabs[4]:
-        top_left, top_right = st.columns([2.2, 1.0])
-        with top_left:
-            st.subheader("Insights y Recomendaciones (MongoDB)")
-            st.caption(
-                f"Documento `_id: {mongo_doc.get('_id')}` leído desde `{mongo_backend}` "
-                "(Base: `orinoco_bigdata` · Colección: `analisis_crispdm`)."
-            )
-        with top_right:
-            if not PDF_REPORT_PATH.exists():
-                from src.generate_pdf import generate_pdf_from_mongodb
-                generate_pdf_from_mongodb()
-            pdf_bytes = PDF_REPORT_PATH.read_bytes()
-            st.download_button(
-                label="📥 Descargar Reporte PDF Automático",
-                data=pdf_bytes,
-                file_name="reporte_bigdata_orinoco.pdf",
-                mime="application/pdf",
-                type="primary",
-                width="stretch",
-            )
+        with st.container(border=True):
+            top_left, top_right = st.columns([2.2, 1.0])
+            with top_left:
+                _render_card_header(
+                    "💡 Insights Ejecutivos y Recomendaciones (MongoDB)",
+                    f"Documento _id: {mongo_doc.get('_id')} · Backend activo: {mongo_backend} (Base: orinoco_bigdata · Colección: analisis_crispdm)",
+                )
+            with top_right:
+                if not PDF_REPORT_PATH.exists():
+                    from src.generate_pdf import generate_pdf_from_mongodb
+                    generate_pdf_from_mongodb()
+                pdf_bytes = PDF_REPORT_PATH.read_bytes()
+                st.download_button(
+                    label="📥 Descargar Reporte PDF Automático",
+                    data=pdf_bytes,
+                    file_name="reporte_bigdata_orinoco.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    width="stretch",
+                )
+                expand_all_cards = st.toggle(
+                    "Expandir todas las tarjetas",
+                    value=False,
+                    key="expand_all_tab5",
+                )
 
-        ins_col, rec_col = st.columns(2)
-        with ins_col:
-            st.markdown("##### 🔍 Insights Clave (clic para ampliar)")
-            for ins in mongo_doc["insights"]:
-                badge = _impact_badge(ins["impacto_negocio"])
-                with st.expander(f"[{ins['id']}] {badge} · {ins['titulo']}", expanded=False):
-                    st.caption(f"Tema: {ins['tema']}")
-                    st.write(ins["descripcion"])
+        insights_list = mongo_doc["insights"]
+        recs_list = mongo_doc["recomendaciones"]
 
-        with rec_col:
-            st.markdown("##### 🎯 Recomendaciones Accionables (clic para ampliar)")
-            for rec in mongo_doc["recomendaciones"]:
-                with st.expander(f"[{rec['id']}] {rec['destinatario']}", expanded=False):
-                    st.markdown(f"**Acción:** {rec['recomendacion']}")
-                    st.success(f"**Beneficio:** {rec['beneficio_esperado']}")
+        with st.container(key="aligned_cards_grid"):
+            hdr_ins, hdr_rec = st.columns(2)
+            with hdr_ins:
+                _render_card_header(
+                    f"🔍 Insights Clave ({len(insights_list)})",
+                    "Hallazgos cuantitativos por impacto de negocio",
+                )
+            with hdr_rec:
+                _render_card_header(
+                    f"🎯 Recomendaciones Accionables ({len(recs_list)})",
+                    "Acciones para operación, alerta e ingeniería",
+                )
 
-        st.divider()
+            ins_col, rec_col = st.columns(2)
+            with ins_col:
+                for ins in insights_list:
+                    _render_insight_card(ins, expanded=expand_all_cards)
+            with rec_col:
+                for rec in recs_list:
+                    _render_recommendation_card(rec, expanded=expand_all_cards)
+
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
         with st.expander("📖 Diccionario / Glosario Hidrometeorológico de Variables (18 predictores + Target)", expanded=False):
             glos_df = _build_glossary_dataframe().copy()
             glos_df["Variable"] = glos_df["Variable"].map(lambda v: f"`{v}`")

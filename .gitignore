@@ -8,3 +8,6 @@ __pycache__/
 # Datos crudos pesados (se regeneran con python -m src.download_data)
 data/raw/*
 !data/raw/.gitkeep
+
+# Skills locales de agentes
+.agents/

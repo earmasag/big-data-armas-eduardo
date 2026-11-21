@@ -73,6 +73,7 @@ services:
       - ./reports:/workspace/reports
       - ./app:/workspace/app
       - ./src:/workspace/src
+      - ./.streamlit:/workspace/.streamlit
     networks:
       - bigdata_net
     command: >
