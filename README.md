@@ -101,7 +101,6 @@ Armas_Eduardo_BigData_ProyectoFinal/
 │   ├── ml_pipeline.py                                     # Entrenamiento sin leakage (Naive, Ridge, RF, XGBoost) -> .joblib
 │   ├── mongodb_store.py                                   # Persistencia y 3 consultas NoSQL en MongoDB + cierre de conexión
 │   ├── generate_pdf.py                                    # Generación automática del reporte PDF desde MongoDB con ReportLab
-│   ├── build_notebook.py                                  # Constructor y ejecutor limpio (Restart & Run All) del notebook
 │   └── run_all.py                                         # Orquestador de punta a punta del pipeline
 ├── models/
 │   └── modelo_orinoco.joblib                              # Modelo ganador entrenado listo para inferencia en el dashboard
